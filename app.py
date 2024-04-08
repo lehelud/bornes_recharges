@@ -109,7 +109,7 @@ def plot_map(gdf_stations_france, france_metropolitaine):
 
 # Streamlit UI
 def main():
-    st.title("Dashboard des Bornes de Recharge en France")
+    st.title("Dashboard des bornes de recharge en France")
     
     # Importation des données
     # df_year = pd.read_csv('data_year.csv')
