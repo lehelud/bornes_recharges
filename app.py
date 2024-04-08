@@ -13,11 +13,36 @@ plt.rcParams['font.family'] = 'Montserrat'
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
 
+
 # Télécharger le fichier
-response = requests.get(url)
+# response = requests.get(url)
+def download_csv(url, file_path):
+    try:
+        # Send HTTP GET request to the URL
+        response = requests.get(url)
+        
+        # Check if the request was successful (HTTP status code 200)
+        if response.status_code == 200:
+            # Open a file in write-binary mode to save the CSV content
+            with open(file_path, 'wb') as file:
+                file.write(response.content)
+            print(f"File downloaded successfully and saved as {file_path}")
+        else:
+            print(f"Failed to download the file. Status code: {response.status_code}")
+    
+    except requests.RequestException as e:
+        # Handle any exceptions that may occur during the request
+        print(f"An error occurred: {e}")
+
+# Local path where the CSV will be saved
+file_path = 'downloaded_data.csv'
+
+# Call the function to download the CSV
+download_csv(url, file_path)
 
 # Lire le contenu téléchargé directement en DataFrame
-df = pd.read_csv(StringIO(response.text), low_memory=False)
+df = pd.read_csv(file_path, low_memory=False)
+# df = pd.read_csv(StringIO(response.text), low_memory=False)
 
 # Transformer toutes les colonnes contenant 'date' en datetime
 for col in df.filter(like='date_').columns:
