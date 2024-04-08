@@ -1,0 +1,3 @@
+[submodule "bornes_recharges"]
+	path = bornes_recharges
+	url = https://github.com/lehelud/bornes_recharges
