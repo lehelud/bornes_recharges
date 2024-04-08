@@ -10,21 +10,14 @@ import numpy as np
 
 plt.rcParams['font.family'] = 'Montserrat'
 
-
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
 
 # Télécharger le fichier
 response = requests.get(url)
 
-# Nom du fichier local où sauvegarder le contenu téléchargé
-file_name = "dataset.csv"
-
-# Sauvegarder le contenu dans un fichier local
-with open(file_name, 'wb') as file:
-    file.write(response.content)
-
-df = pd.read_csv(file_name,low_memory=False)
+# Lire le contenu téléchargé directement en DataFrame
+df = pd.read_csv(StringIO(response.text), low_memory=False)
 
 # Transformer toutes les colonnes contenant 'date' en datetime
 for col in df.filter(like='date_').columns:
@@ -114,7 +107,7 @@ def plot_map(gdf_stations_france, france_metropolitaine):
 
 # Streamlit UI
 def main():
-    st.title("Dashboard des Bornes de Recharge en France")
+    st.title("Dashboard des bornes de recharge en France")
     
     # Importation des données
     # df_year = pd.read_csv('data_year.csv')
