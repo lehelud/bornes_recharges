@@ -15,7 +15,18 @@ plt.rcParams['font.family'] = 'Montserrat'
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
 
 # Télécharger le fichier
-response = requests.get(url)
+# response = requests.get(url)
+
+# Check if the response is OK and log the content for debugging
+if response.ok:
+    print("Data received:", response.text[:500])  # print first 500 characters of the data
+    try:
+        df = pd.read_csv(StringIO(response.text), low_memory=False)
+    except Exception as e:
+        print("Failed to parse CSV:", e)
+        # Additional error handling or fallback logic here
+else:
+    print("Failed to retrieve data:", response.status_code)
 
 # Lire le contenu téléchargé directement en DataFrame
 df = pd.read_csv(StringIO(response.text), low_memory=False)
