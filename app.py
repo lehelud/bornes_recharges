@@ -7,9 +7,9 @@ from matplotlib.cm import ScalarMappable
 import geopandas as gpd
 from datetime import datetime
 import numpy as np
+from io import StringIO
 
 plt.rcParams['font.family'] = 'Montserrat'
-
 
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
@@ -17,19 +17,14 @@ url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de54
 # Télécharger le fichier
 response = requests.get(url)
 
-# Nom du fichier local où sauvegarder le contenu téléchargé
-file_name = "dataset.csv"
-
-# Sauvegarder le contenu dans un fichier local
-with open(file_name, 'wb') as file:
-    file.write(response.content)
-
-df = pd.read_csv(file_name,low_memory=False)
+# Lire le contenu téléchargé directement en DataFrame
+df = pd.read_csv(StringIO(response.text), low_memory=False)
 
 # Transformer toutes les colonnes contenant 'date' en datetime
 for col in df.filter(like='date_').columns:
     print(col)
     df[col] = pd.to_datetime(df[col])
+
 # Extraire le min et le max pour chaque variable de date
 # for col in df.select_dtypes(include=['datetime']).columns:
 #     print(f"{col} - Min: {df[col].min()}, Max: {df[col].max()}")
