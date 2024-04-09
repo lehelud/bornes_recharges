@@ -200,6 +200,9 @@ formatted_date = format_date(next_day, format='long', locale='fr')
 def main():
     title = f"Bornes de recharge en France \n Dashboard en construction (données au {formatted_date} - mise à jour quotidienne)"
     st.title(title)
+
+    # Add a link to the data source
+    st.markdown("Source des données: [Fichier consolidé des bornes de recharge pour véhicules électriques](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-electriques/)")
     
     # User choice for type of data visualization
     chart_type = st.radio(
