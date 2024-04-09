@@ -6,7 +6,9 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 import geopandas as gpd
 from datetime import datetime
+from datetime import timedelta
 import numpy as np
+from babel.dates import format_date
 
 plt.rcParams['font.family'] = 'Montserrat'
 
@@ -45,14 +47,10 @@ df = pd.read_csv(file_path, low_memory=False)
 # df = pd.read_csv(StringIO(response.text), low_memory=False)
 
 # Transformer toutes les colonnes contenant 'date' en datetime
-for col in df.filter(like='date_').columns:
-    print(col)
+# Use a regular expression to select columns to convert
+date_columns = df.filter(regex='date_|_at$').columns
+for col in date_columns:
     df[col] = pd.to_datetime(df[col])
-# Extraire le min et le max pour chaque variable de date
-# for col in df.select_dtypes(include=['datetime']).columns:
-#     print(f"{col} - Min: {df[col].min()}, Max: {df[col].max()}")
-
-# print(df.id_pdc_local.nunique())
 
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
@@ -130,21 +128,23 @@ def plot_map(gdf_stations_france, france_metropolitaine):
     ax.set_title('Emplacement des stations de recharge en France')
     return plt
 
+# Find the maximum date in the 'created_at' column
+date_max_created_at = df['created_at'].max()
+next_day = date_max_created_at + timedelta(days=1)
+# Format the date in French
+formatted_date = format_date(next_day, format='long', locale='fr')
+
 # Streamlit UI
 def main():
-    st.title("Bornes de recharge en France \n Dashboard (en construction)")
+    title = f"Bornes de recharge en France \n Dashboard en construction (données au {formatted_date} - mise à jour quotidienne)"
+    st.title(title)
     
-    # Importation des données
-    # df_year = pd.read_csv('data_year.csv')
-    # gdf_stations_france = gpd.read_file('stations_france.geojson')
-    # france_metropolitaine_4326 = gpd.read_file('france_metropolitaine_4326.geojson')  # Assurez-vous d'avoir ce fichier également
-
     st.header("Nombre total de bornes installées par année")
-    fig1 = plot_bar_chart(df_year)
+    fig1 = plot_bar_chart(df_year)  # Assuming df_year and plot_bar_chart are defined elsewhere
     st.pyplot(fig1)
 
     st.header("Emplacement des stations de recharge en France")
-    fig2 = plot_map(gdf_stations_france, france_metropolitaine)
+    fig2 = plot_map(gdf_stations_france, france_metropolitaine)  # Assuming gdf_stations_france, france_metropolitaine and plot_map are defined elsewhere
     st.pyplot(fig2)
 
 if __name__ == "__main__":
