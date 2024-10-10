@@ -9,8 +9,12 @@ from datetime import datetime, timedelta
 import numpy as np
 from babel.dates import format_date
 from pandas.tseries.holiday import USFederalHolidayCalendar as Calendar
+import warnings
 
 plt.rcParams['font.family'] = 'Montserrat'
+
+# Ignorer les avertissements relatifs aux dates hors limites
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
@@ -38,12 +42,16 @@ download_csv(url, file_path)
 df = pd.read_csv(file_path, low_memory=False)
 
 # Transformer toutes les colonnes date en datetime
+# Limiter les valeurs entre 1677 et 2262 avant conversion
 date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
-    df[col] = pd.to_datetime(df[col], errors='coerce')  # Ajout de errors='coerce' pour éviter les erreurs sur les dates hors limites
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+    df.loc[df[col] < -6847786800000000000, col] = np.nan  # Limite inférieure (1677-09-21)
+    df.loc[df[col] > 9223372036854775807, col] = np.nan   # Limite supérieure (2262-04-11)
+    df[col] = pd.to_datetime(df[col], errors='coerce')
 
-# Remplacer les dates hors limites par NaT et filtrer les dates non valides
-df = df[df[date_columns].apply(lambda x: x.dt.year.between(1677, 2262)).all(axis=1)]
+# Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
+df = df.dropna(subset=date_columns)
 
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
