@@ -46,7 +46,7 @@ df = pd.read_csv(file_path, low_memory=False)
 date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
     df[col] = df[col].astype(str)  # Convertir en chaîne de caractères pour éviter les erreurs
-    df[col] = pd.to_datetime(df[col], errors='coerce')
+    df[col] = pd.to_datetime(df[col], errors='ignore')
     df = df[(df[col].dt.year >= 1677) & (df[col].dt.year <= 2262) | df[col].isna()]  # Filtrer les années valides
 
 # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
@@ -54,7 +54,7 @@ df = df.dropna(subset=date_columns)
 
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
-df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce').dt.year.astype('Int64')
+df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='ignore').dt.year.astype('Int64')
 
 # Compter le nombre unique de bornes installées par année
 df_year = df[df['annee_mise_en_service'].isin(vecteur_annee_inverse)]
