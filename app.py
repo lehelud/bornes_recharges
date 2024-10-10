@@ -47,7 +47,7 @@ date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
     df[col] = df[col].astype(str)  # Convertir en chaîne de caractères pour éviter les erreurs
     # Remplacer les valeurs hors limites par NaT avant conversion
-    df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
+    df[col] = pd.to_datetime(df[col], errors='ignore', utc=True)
     df.loc[(df[col].dt.year < 1677) | (df[col].dt.year > 2262), col] = pd.NaT
 
 # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
