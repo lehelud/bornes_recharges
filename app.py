@@ -42,6 +42,9 @@ date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
     df[col] = pd.to_datetime(df[col], errors='coerce')  # Ajout de errors='coerce' pour éviter les erreurs sur les dates hors limites
 
+# Filtrer les dates non valides
+df = df.dropna(subset=date_columns)
+
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
 df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce').dt.year.astype('Int64')
@@ -162,7 +165,7 @@ formatted_date = format_date(next_day, format='long', locale='fr')
 def main():
     title = f"Bornes de recharge en France \n Dashboard en construction (données au {formatted_date} - mise à jour quotidienne)"
     st.title(title)
-    st.markdown("Source des données: [Fichier consolidé des bornes de recharge pour véhicules électriques](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-electriques/)")
+    st.markdown("Source des données: [Fichier consolidé des bornes de recharge pour véhicules électriques](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-électriques/)")
     chart_type = st.radio(
         "Choisissez le type de graphique à afficher:",
         ('Nombre total de bornes installées par année', 'Nombre moyen de bornes installées par jour ouvré')
