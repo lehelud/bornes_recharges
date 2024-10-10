@@ -47,7 +47,7 @@ date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
     df[col] = df[col].astype(str)  # Convertir en chaîne de caractères pour éviter les erreurs
     # Remplacer les valeurs hors limites par NaT avant conversion
-    df[col] = pd.to_datetime(df[col], errors='coerce')
+    df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
     df.loc[(df[col].dt.year < 1677) | (df[col].dt.year > 2262), col] = pd.NaT
 
 # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
@@ -55,7 +55,7 @@ df = df.dropna(subset=date_columns)
 
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
-df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce').dt.year.astype('Int64')
+df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce', utc=True).dt.year.astype('Int64')
 
 # Compter le nombre unique de bornes installées par année
 df_year = df[df['annee_mise_en_service'].isin(vecteur_annee_inverse)]
@@ -165,7 +165,7 @@ def plot_map(gdf_stations_france, france_metropolitaine):
     return fig
 
 # Formater la date en français
-date_max_created_at = pd.to_datetime(df['created_at'], errors='coerce').max()
+date_max_created_at = pd.to_datetime(df['created_at'], errors='coerce', utc=True).max()
 next_day = date_max_created_at + timedelta(days=1)
 formatted_date = format_date(next_day, format='long', locale='fr')
 
