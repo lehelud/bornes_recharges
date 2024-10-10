@@ -44,10 +44,12 @@ df = pd.read_csv(file_path, low_memory=False)
 # Transformer toutes les colonnes date en datetime
 # Limiter les valeurs entre 1677 et 2262 avant conversion
 date_columns = df.filter(regex='date_|_at$').columns
+date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
-    df[col] = df[col].astype(str)  # Convertir en chaîne de caractères pour éviter les erreurs
-    # Remplacer les valeurs hors limites par NaT avant conversion
-    df[col] = pd.to_datetime(df[col], errors='ignore', utc=True)
+    # Vérifier que la colonne est de type datetime, sinon convertir
+    df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
+    
+    # Appliquer la condition sur les années après la conversion
     df.loc[(df[col].dt.year < 1677) | (df[col].dt.year > 2262), col] = pd.NaT
 
 # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
