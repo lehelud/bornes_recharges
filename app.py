@@ -10,7 +10,7 @@ import numpy as np
 from babel.dates import format_date
 from pandas.tseries.holiday import USFederalHolidayCalendar as Calendar
 
-plt.rcParams['font.family'] = 'Montserrat'
+# plt.rcParams['font.family'] = 'Montserrat'
 
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
