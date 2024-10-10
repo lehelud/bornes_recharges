@@ -10,7 +10,7 @@ import numpy as np
 from babel.dates import format_date
 from pandas.tseries.holiday import USFederalHolidayCalendar as Calendar
 
-# plt.rcParams['font.family'] = 'Montserrat'
+plt.rcParams['font.family'] = 'Montserrat'
 
 # URL du fichier
 url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
@@ -42,8 +42,8 @@ date_columns = df.filter(regex='date_|_at$').columns
 for col in date_columns:
     df[col] = pd.to_datetime(df[col], errors='coerce')  # Ajout de errors='coerce' pour éviter les erreurs sur les dates hors limites
 
-# Filtrer les dates non valides
-df = df.dropna(subset=date_columns)
+# Remplacer les dates hors limites par NaT et filtrer les dates non valides
+df = df[df[date_columns].apply(lambda x: x.dt.year.between(1677, 2262)).all(axis=1)]
 
 annee_actuelle = datetime.now().year
 vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
