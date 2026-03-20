@@ -2,14 +2,13 @@ import warnings
 from datetime import datetime, timedelta
 
 import geopandas as gpd
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from babel.dates import format_date
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 
@@ -19,7 +18,9 @@ YEARS_WINDOW = 8
 LAT_MIN, LAT_MAX = 41.5, 51.0
 LON_MIN, LON_MAX = -5.0, 9.5
 JOURS_FERIES_FIXES = ["01-01","05-01","05-08","07-14","08-15","11-01","11-11","12-25"]
-plt.rcParams["font.family"] = "Montserrat"
+
+COLOR_TEAL = "#1AA6A6"
+COLOR_BLUE = "#007ACC"
 
 
 def paques(annee):
@@ -82,57 +83,106 @@ def calculer_stats_annuelles(df, years_window):
 
 
 def filtrer_france_metropolitaine(df):
-    df_metro = df[df["consolidated_latitude"].between(LAT_MIN, LAT_MAX) & df["consolidated_longitude"].between(LON_MIN, LON_MAX)]
-    return gpd.GeoDataFrame(df_metro, geometry=gpd.points_from_xy(df_metro["consolidated_longitude"], df_metro["consolidated_latitude"]), crs="EPSG:4326")
+    df_metro = df[
+        df["consolidated_latitude"].between(LAT_MIN, LAT_MAX)
+        & df["consolidated_longitude"].between(LON_MIN, LON_MAX)
+    ].copy()
+    return df_metro
 
 
-def _style_ax(ax):
-    ax.grid(False)
-    ax.spines[:].set_visible(False)
-
+# ---------------------------------------------------------------------------
+# Graphiques Plotly interactifs
+# ---------------------------------------------------------------------------
 
 def plot_total_annuel(bornes_par_annee):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(bornes_par_annee.index.astype(str), bornes_par_annee.values, color="#1AA6A6", width=0.5)
-    ax.set_title("Nombre total de bornes installees par annee")
-    ax.set_xlabel("Annee")
-    ax.set_ylabel("Nombre de bornes")
-    _style_ax(ax)
-    for i, v in enumerate(bornes_par_annee.values):
-        ax.text(i, v, f"{v:,.0f}".replace(",", " "), ha="center", va="bottom")
-    plt.tight_layout()
+    df_plot = bornes_par_annee.reset_index()
+    df_plot.columns = ["Annee", "Bornes"]
+    df_plot["Annee"] = df_plot["Annee"].astype(str)
+    fig = px.bar(
+        df_plot,
+        x="Annee",
+        y="Bornes",
+        text="Bornes",
+        color_discrete_sequence=[COLOR_TEAL],
+        title="Nombre total de bornes installees par annee",
+        labels={"Annee": "Annee", "Bornes": "Nombre de bornes"},
+    )
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Bornes : %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False),
+        xaxis=dict(showgrid=False),
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
     return fig
 
 
 def plot_moyenne_journaliere(results):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(results.index.astype(str), results["avg_per_working_day"], color="#007ACC", width=0.5)
-    ax.set_title("Nombre moyen de bornes par jour ouvre")
-    ax.set_xlabel("Annee")
-    ax.set_ylabel("Moyenne / jour ouvre")
-    _style_ax(ax)
-    for i, v in enumerate(results["avg_per_working_day"]):
-        ax.text(i, v, f"{v:.1f}", ha="center", va="bottom")
-    plt.tight_layout()
+    df_plot = results.reset_index()[["annee_mise_en_service", "avg_per_working_day"]]
+    df_plot.columns = ["Annee", "Moyenne"]
+    df_plot["Annee"] = df_plot["Annee"].astype(str)
+    fig = px.bar(
+        df_plot,
+        x="Annee",
+        y="Moyenne",
+        text="Moyenne",
+        color_discrete_sequence=[COLOR_BLUE],
+        title="Nombre moyen de bornes installees par jour ouvre",
+        labels={"Annee": "Annee", "Moyenne": "Moyenne / jour ouvre"},
+    )
+    fig.update_traces(
+        texttemplate="%{text:.1f}",
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Moyenne : %{y:.1f} bornes/jour<extra></extra>",
+    )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False),
+        xaxis=dict(showgrid=False),
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
     return fig
 
 
-def plot_carte(gdf_stations, france):
-    cmap = plt.cm.viridis
-    norm = Normalize(vmin=gdf_stations["annee_mise_en_service"].min(), vmax=gdf_stations["annee_mise_en_service"].max())
-    fig, ax = plt.subplots(figsize=(10, 10))
-    france.plot(ax=ax, color="lightgray")
-    gdf_stations.plot(ax=ax, markersize=5, column="annee_mise_en_service", cmap=cmap, norm=norm)
-    sm = ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    fig.colorbar(sm, ax=ax, label="Annee de mise en service")
-    ax.set_title("Stations de recharge en France")
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.spines[:].set_visible(False)
-    plt.tight_layout()
+def plot_carte(df_metro, annees):
+    df_filtre = df_metro[df_metro["annee_mise_en_service"].isin(annees)].copy()
+    df_filtre["annee_str"] = df_filtre["annee_mise_en_service"].astype(str)
+    fig = px.scatter_mapbox(
+        df_filtre,
+        lat="consolidated_latitude",
+        lon="consolidated_longitude",
+        color="annee_str",
+        hover_name="nom_amenageur" if "nom_amenageur" in df_filtre.columns else None,
+        hover_data={
+            "consolidated_latitude": False,
+            "consolidated_longitude": False,
+            "annee_str": True,
+        },
+        color_discrete_sequence=px.colors.sequential.Viridis,
+        zoom=4.8,
+        center={"lat": 46.5, "lon": 2.5},
+        title="Stations de recharge en France",
+        labels={"annee_str": "Annee"},
+    )
+    fig.update_traces(marker=dict(size=4), hovertemplate="<b>%{hovertext}</b><br>Annee : %{marker.color}<extra></extra>")
+    fig.update_layout(
+        mapbox_style="carto-positron",
+        margin=dict(l=0, r=0, t=40, b=0),
+        height=600,
+        hoverlabel=dict(bgcolor="white", font_size=12),
+    )
     return fig
 
+
+# ---------------------------------------------------------------------------
+# Interface Streamlit
+# ---------------------------------------------------------------------------
 
 def afficher_header(df):
     date_max = pd.to_datetime(df["created_at"], errors="coerce", utc=True).max()
@@ -142,32 +192,44 @@ def afficher_header(df):
     st.markdown("Source : [data.gouv.fr](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-electriques/)")
 
 
+def afficher_kpis(df, bornes_par_annee):
+    annee_courante = datetime.now().year
+    total = int(df["id_pdc_itinerance"].nunique())
+    cette_annee = int(bornes_par_annee.get(annee_courante, 0))
+    annee_prec = int(bornes_par_annee.get(annee_courante - 1, 0))
+    delta = f"+{cette_annee - annee_prec:,}" if annee_prec else "N/A"
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total bornes", f"{total:,}".replace(",", " "))
+    c2.metric(f"Installees en {annee_courante}", f"{cette_annee:,}".replace(",", " "))
+    c3.metric(f"vs {annee_courante - 1}", delta)
+
+
 def afficher_graphiques(results, bornes_par_annee):
-    choix = st.radio("Graphique a afficher :", ["Nombre total de bornes par annee", "Moyenne par jour ouvre"])
-    if choix == "Nombre total de bornes par annee":
-        st.subheader("Nombre total de bornes installees par annee")
-        st.pyplot(plot_total_annuel(bornes_par_annee))
+    choix = st.radio("Graphique a afficher :", ["Nombre total par annee", "Moyenne par jour ouvre"], horizontal=True)
+    if choix == "Nombre total par annee":
+        st.plotly_chart(plot_total_annuel(bornes_par_annee), use_container_width=True)
     else:
-        st.subheader("Moyenne de bornes par jour ouvre")
-        st.pyplot(plot_moyenne_journaliere(results))
+        st.plotly_chart(plot_moyenne_journaliere(results), use_container_width=True)
 
 
-def afficher_carte(df, france, annees):
-    st.subheader("Carte des stations de recharge")
-    gdf = filtrer_france_metropolitaine(df[df["annee_mise_en_service"].isin(annees)])
-    st.pyplot(plot_carte(gdf, france))
+def afficher_carte(df, annees):
+    st.subheader("Carte interactive des stations")
+    df_metro = filtrer_france_metropolitaine(df)
+    st.plotly_chart(plot_carte(df_metro, annees), use_container_width=True)
 
 
 def main():
     st.set_page_config(page_title="Bornes de recharge", layout="wide")
     df = charger_donnees(DATA_URL)
-    france = charger_geodata(SHAPEFILE_PATH)
     annee_courante = datetime.now().year
     annees = np.arange(annee_courante, annee_courante - YEARS_WINDOW, -1)
     results, bornes_par_annee = calculer_stats_annuelles(df, YEARS_WINDOW)
     afficher_header(df)
+    afficher_kpis(df, bornes_par_annee)
+    st.divider()
     afficher_graphiques(results, bornes_par_annee)
-    afficher_carte(df, france, annees)
+    st.divider()
+    afficher_carte(df, annees)
 
 
 if __name__ == "__main__":
