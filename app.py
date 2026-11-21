@@ -153,7 +153,7 @@ def plot_moyenne_journaliere(results):
 def plot_carte(df_metro, annees):
     df_filtre = df_metro[df_metro["annee_mise_en_service"].isin(annees)].copy()
     df_filtre["annee_str"] = df_filtre["annee_mise_en_service"].astype(str)
-    fig = px.scatter_mapbox(
+    fig = px.scatter_map(
         df_filtre,
         lat="consolidated_latitude",
         lon="consolidated_longitude",
@@ -172,7 +172,7 @@ def plot_carte(df_metro, annees):
     )
     fig.update_traces(marker=dict(size=4), hovertemplate="<b>%{hovertext}</b><br>Annee : %{marker.color}<extra></extra>")
     fig.update_layout(
-        mapbox_style="carto-positron",
+        map_style="carto-positron",
         margin=dict(l=0, r=0, t=40, b=0),
         height=600,
         hoverlabel=dict(bgcolor="white", font_size=12),
