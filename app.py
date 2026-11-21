@@ -19,6 +19,19 @@ LAT_MIN, LAT_MAX = 41.5, 51.0
 LON_MIN, LON_MAX = -5.0, 9.5
 JOURS_FERIES_FIXES = ["01-01","05-01","05-08","07-14","08-15","11-01","11-11","12-25"]
 
+ANNEE_MIN = 2010
+NON_RENSEIGNE = "Non renseignée"
+AUTRES = "Autres aménageurs"
+CLASSES_PUISSANCE = [
+    "Normale (≤ 7,4 kW)",
+    "Accélérée (7,4 – 22 kW)",
+    "Rapide (22 – 150 kW)",
+    "Ultra-rapide (≥ 150 kW)",
+    NON_RENSEIGNE,
+]
+COULEURS_PUISSANCE = ["#9ad0a0", "#2ca58d", "#0a6e8a", "#3b1f6b", "#bdbdbd"]
+COULEUR_AUTRES = "#bdbdbd"
+
 COLOR_TEAL = "#1AA6A6"
 COLOR_BLUE = "#007ACC"
 
@@ -61,7 +74,26 @@ def charger_donnees(url):
         df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
     df = df.dropna(subset=cols_date)
     df["annee_mise_en_service"] = pd.to_datetime(df["date_mise_en_service"], errors="coerce", utc=True).dt.year.astype("Int64")
+    df["puissance_kw"] = convertir_puissance_kw(df["puissance_nominale"])
+    df["classe_puissance"] = classer_puissance(df["puissance_kw"])
+    df["amenageur"] = df["nom_amenageur"].fillna(NON_RENSEIGNE).astype(str).str.strip()
     return df
+
+
+def convertir_puissance_kw(puissance):
+    """Puissance en kW ; les valeurs >= 1000 sont supposées saisies en W."""
+    p = pd.to_numeric(puissance, errors="coerce")
+    return p.where(p < 1000, p / 1000)
+
+
+def classer_puissance(puissance_kw):
+    """Regroupe les puissances en 4 classes + 'Non renseignée' (valeur nulle ou absente)."""
+    classes = pd.cut(
+        puissance_kw,
+        bins=[0, 7.4, 23, 149.99, np.inf],  # 23 kW pour inclure les bornes déclarées à 22,08 kW
+        labels=CLASSES_PUISSANCE[:4],
+    )
+    return classes.cat.add_categories(NON_RENSEIGNE).fillna(NON_RENSEIGNE).astype(str)
 
 
 @st.cache_data(show_spinner="Chargement du shapefile...")
@@ -150,33 +182,78 @@ def plot_moyenne_journaliere(results):
     return fig
 
 
-def plot_carte(df_metro, annees):
-    df_filtre = df_metro[df_metro["annee_mise_en_service"].isin(annees)].copy()
-    df_filtre["annee_str"] = df_filtre["annee_mise_en_service"].astype(str)
+def couleurs_carte(df_filtre, couleur_par):
+    """Retourne (colonne, ordre des modalités, couleurs) selon la variable choisie."""
+    if couleur_par == "Puissance":
+        ordre = [c for c in CLASSES_PUISSANCE if c in set(df_filtre["classe_puissance"])]
+        couleurs = dict(zip(CLASSES_PUISSANCE, COULEURS_PUISSANCE))
+        return "classe_puissance", ordre, [couleurs[c] for c in ordre]
+    if couleur_par == "Aménageur":
+        effectifs = df_filtre["amenageur_carte"].value_counts()
+        ordre = [a for a in effectifs.index if a != AUTRES] + ([AUTRES] if AUTRES in effectifs.index else [])
+        palette = px.colors.qualitative.Alphabet
+        couleurs = [COULEUR_AUTRES if a == AUTRES else palette[i % len(palette)] for i, a in enumerate(ordre)]
+        return "amenageur_carte", ordre, couleurs
+    ordre = sorted(df_filtre["annee_str"].unique())
+    couleurs = px.colors.sample_colorscale("Viridis", [i / max(len(ordre) - 1, 1) for i in range(len(ordre))])
+    return "annee_str", ordre, couleurs
+
+
+def plot_carte(df_filtre, couleur_par):
+    colonne, ordre, couleurs = couleurs_carte(df_filtre, couleur_par)
     fig = px.scatter_map(
         df_filtre,
         lat="consolidated_latitude",
         lon="consolidated_longitude",
-        color="annee_str",
-        hover_name="nom_amenageur" if "nom_amenageur" in df_filtre.columns else None,
-        hover_data={
-            "consolidated_latitude": False,
-            "consolidated_longitude": False,
-            "annee_str": True,
-        },
-        color_discrete_sequence=px.colors.sequential.Viridis,
+        color=colonne,
+        category_orders={colonne: ordre},
+        color_discrete_sequence=couleurs,
+        custom_data=["amenageur", "classe_puissance", "puissance_kw", "annee_str"],
         zoom=4.8,
         center={"lat": 46.5, "lon": 2.5},
-        title="Stations de recharge en France",
-        labels={"annee_str": "Annee"},
-        category_orders={"annee_str": [str(a) for a in sorted(annees)]},
+        labels={"annee_str": "Année", "classe_puissance": "Puissance", "amenageur_carte": "Aménageur"},
     )
-    fig.update_traces(marker=dict(size=4), hovertemplate="<b>%{hovertext}</b><br>Annee : %{fullData.name}<extra></extra>")
+    fig.update_traces(
+        marker=dict(size=4),
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Puissance : %{customdata[2]:.1f} kW (%{customdata[1]})<br>"
+            "Mise en service : %{customdata[3]}<extra></extra>"
+        ),
+    )
     fig.update_layout(
         map_style="carto-positron",
-        margin=dict(l=0, r=0, t=40, b=0),
-        height=600,
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=650,
         hoverlabel=dict(bgcolor="white", font_size=12),
+        legend=dict(itemsizing="constant"),
+        uirevision="carte",  # garde le zoom quand on change un filtre
+    )
+    return fig
+
+
+def plot_top_amenageurs(df_filtre, nb_top):
+    top = df_filtre["amenageur"].value_counts().head(nb_top).sort_values()
+    fig = px.bar(
+        x=top.values,
+        y=top.index,
+        orientation="h",
+        text=top.values,
+        color_discrete_sequence=[COLOR_TEAL],
+        labels={"x": "Points de charge", "y": ""},
+        title=f"Top {nb_top} des aménageurs (selon les filtres)",
+    )
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>%{x:,.0f} points de charge<extra></extra>",
+    )
+    fig.update_layout(
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        height=max(300, 28 * len(top) + 80),
+        margin=dict(l=0, r=40, t=50, b=0),
     )
     return fig
 
@@ -208,29 +285,71 @@ def afficher_kpis(df, bornes_par_annee):
 def afficher_graphiques(results, bornes_par_annee):
     choix = st.radio("Graphique a afficher :", ["Nombre total par annee", "Moyenne par jour ouvre"], horizontal=True)
     if choix == "Nombre total par annee":
-        st.plotly_chart(plot_total_annuel(bornes_par_annee), use_container_width=True)
+        st.plotly_chart(plot_total_annuel(bornes_par_annee))
     else:
-        st.plotly_chart(plot_moyenne_journaliere(results), use_container_width=True)
+        st.plotly_chart(plot_moyenne_journaliere(results))
 
 
-def afficher_carte(df, annees):
-    st.subheader("Carte interactive des stations")
+def afficher_carte(df):
+    st.subheader("Carte interactive des points de charge")
     df_metro = filtrer_france_metropolitaine(df)
-    st.plotly_chart(plot_carte(df_metro, annees), use_container_width=True)
+    df_metro = df_metro[df_metro["annee_mise_en_service"].between(ANNEE_MIN, datetime.now().year)].copy()
+    df_metro["annee_str"] = df_metro["annee_mise_en_service"].astype(int).astype(str)
+    annees_dispo = sorted(int(a) for a in df_metro["annee_mise_en_service"].unique())
 
+    col1, col2 = st.columns(2)
+    with col1:
+        debut_defaut = max(annees_dispo[0], annees_dispo[-1] - YEARS_WINDOW + 1)
+        annee_debut, annee_fin = st.select_slider(
+            "Années de mise en service",
+            options=annees_dispo,
+            value=(debut_defaut, annees_dispo[-1]),
+        )
+    with col2:
+        couleur_par = st.radio("Colorer par", ["Année", "Puissance", "Aménageur"], horizontal=True)
+    puissances = st.multiselect("Puissance", CLASSES_PUISSANCE, default=CLASSES_PUISSANCE)
+
+    df_filtre = df_metro[
+        df_metro["annee_mise_en_service"].between(annee_debut, annee_fin)
+        & df_metro["classe_puissance"].isin(puissances)
+    ]
+
+    col4, col5 = st.columns([1, 2])
+    with col4:
+        nb_top = st.slider("Nombre de plus grands aménageurs", 5, 25, 10)
+    # Classement calculé sur toute la métropole pour que la liste reste stable quand on change les filtres
+    top_amenageurs = df_metro["amenageur"].value_counts().head(nb_top).index.tolist()
+    with col5:
+        amenageurs = st.multiselect(
+            "Aménageurs (classés du plus grand au plus petit)",
+            top_amenageurs,
+            help="Laisser vide pour afficher tous les aménageurs.",
+        )
+
+    if amenageurs:
+        df_filtre = df_filtre[df_filtre["amenageur"].isin(amenageurs)]
+    df_filtre = df_filtre.assign(
+        amenageur_carte=df_filtre["amenageur"].where(df_filtre["amenageur"].isin(top_amenageurs), AUTRES)
+    )
+
+    if df_filtre.empty:
+        st.info("Aucun point de charge ne correspond à ces filtres.")
+        return
+
+    st.caption(f"{len(df_filtre):,} points de charge affichés".replace(",", " "))
+    st.plotly_chart(plot_carte(df_filtre, couleur_par))
+    st.plotly_chart(plot_top_amenageurs(df_filtre, nb_top))
 
 def main():
     st.set_page_config(page_title="Bornes de recharge", layout="wide")
     df = charger_donnees(DATA_URL)
-    annee_courante = datetime.now().year
-    annees = np.arange(annee_courante, annee_courante - YEARS_WINDOW, -1)
     results, bornes_par_annee = calculer_stats_annuelles(df, YEARS_WINDOW)
     afficher_header(df)
     afficher_kpis(df, bornes_par_annee)
     st.divider()
     afficher_graphiques(results, bornes_par_annee)
     st.divider()
-    afficher_carte(df, annees)
+    afficher_carte(df)
 
 
 if __name__ == "__main__":
