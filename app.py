@@ -21,15 +21,17 @@ JOURS_FERIES_FIXES = ["01-01","05-01","05-08","07-14","08-15","11-01","11-11","1
 
 ANNEE_MIN = 2010
 NON_RENSEIGNE = "Non renseignée"
-AUTRES = "Autres aménageurs"
+AUTRES = "Autres opérateurs"
+OPERATEUR_INCONNU = "Opérateur non renseigné"
 CLASSES_PUISSANCE = [
     "Normale (≤ 7,4 kW)",
     "Accélérée (7,4 – 22 kW)",
-    "Rapide (22 – 150 kW)",
+    "Rapide (22 – 50 kW)",
+    "Rapide (50 – 150 kW)",
     "Ultra-rapide (≥ 150 kW)",
     NON_RENSEIGNE,
 ]
-COULEURS_PUISSANCE = ["#9ad0a0", "#2ca58d", "#0a6e8a", "#3b1f6b", "#bdbdbd"]
+COULEURS_PUISSANCE = ["#b5e0a8", "#4cb88f", "#1a8a8f", "#1f5a8a", "#3b1f6b", "#bdbdbd"]
 COULEUR_AUTRES = "#bdbdbd"
 
 COLOR_TEAL = "#1AA6A6"
@@ -76,8 +78,17 @@ def charger_donnees(url):
     df["annee_mise_en_service"] = pd.to_datetime(df["date_mise_en_service"], errors="coerce", utc=True).dt.year.astype("Int64")
     df["puissance_kw"] = convertir_puissance_kw(df["puissance_nominale"])
     df["classe_puissance"] = classer_puissance(df["puissance_kw"])
-    df["amenageur"] = df["nom_amenageur"].fillna(NON_RENSEIGNE).astype(str).str.strip()
+    df["operateur"] = nettoyer_operateur(df["nom_operateur"])
     return df
+
+
+def nettoyer_operateur(noms):
+    """Regroupe les variantes d'un même opérateur ('IZIVIA' / 'Izivia', 'SPBR1 | FR*EBN' / 'SPBR1')
+    et garde l'orthographe la plus fréquente."""
+    noms = noms.fillna(OPERATEUR_INCONNU).astype(str).str.split("|").str[0].str.strip()
+    cle = noms.str.casefold().str.replace(r"[^0-9a-zà-ÿ]", "", regex=True)
+    libelle = noms.groupby(cle).agg(lambda s: s.value_counts().index[0])
+    return cle.map(libelle)
 
 
 def convertir_puissance_kw(puissance):
@@ -87,11 +98,11 @@ def convertir_puissance_kw(puissance):
 
 
 def classer_puissance(puissance_kw):
-    """Regroupe les puissances en 4 classes + 'Non renseignée' (valeur nulle ou absente)."""
+    """Regroupe les puissances en 5 classes + 'Non renseignée' (valeur nulle ou absente)."""
     classes = pd.cut(
         puissance_kw,
-        bins=[0, 7.4, 23, 149.99, np.inf],  # 23 kW pour inclure les bornes déclarées à 22,08 kW
-        labels=CLASSES_PUISSANCE[:4],
+        bins=[0, 7.4, 23, 49.99, 149.99, np.inf],  # 23 kW pour inclure les bornes déclarées à 22,08 kW
+        labels=CLASSES_PUISSANCE[:-1],
     )
     return classes.cat.add_categories(NON_RENSEIGNE).fillna(NON_RENSEIGNE).astype(str)
 
@@ -188,12 +199,12 @@ def couleurs_carte(df_filtre, couleur_par):
         ordre = [c for c in CLASSES_PUISSANCE if c in set(df_filtre["classe_puissance"])]
         couleurs = dict(zip(CLASSES_PUISSANCE, COULEURS_PUISSANCE))
         return "classe_puissance", ordre, [couleurs[c] for c in ordre]
-    if couleur_par == "Aménageur":
-        effectifs = df_filtre["amenageur_carte"].value_counts()
+    if couleur_par == "Opérateur":
+        effectifs = df_filtre["operateur_carte"].value_counts()
         ordre = [a for a in effectifs.index if a != AUTRES] + ([AUTRES] if AUTRES in effectifs.index else [])
         palette = px.colors.qualitative.Alphabet
         couleurs = [COULEUR_AUTRES if a == AUTRES else palette[i % len(palette)] for i, a in enumerate(ordre)]
-        return "amenageur_carte", ordre, couleurs
+        return "operateur_carte", ordre, couleurs
     ordre = sorted(df_filtre["annee_str"].unique())
     couleurs = px.colors.sample_colorscale("Viridis", [i / max(len(ordre) - 1, 1) for i in range(len(ordre))])
     return "annee_str", ordre, couleurs
@@ -208,10 +219,10 @@ def plot_carte(df_filtre, couleur_par):
         color=colonne,
         category_orders={colonne: ordre},
         color_discrete_sequence=couleurs,
-        custom_data=["amenageur", "classe_puissance", "puissance_kw", "annee_str"],
+        custom_data=["operateur", "classe_puissance", "puissance_kw", "annee_str"],
         zoom=4.8,
         center={"lat": 46.5, "lon": 2.5},
-        labels={"annee_str": "Année", "classe_puissance": "Puissance", "amenageur_carte": "Aménageur"},
+        labels={"annee_str": "Année", "classe_puissance": "Puissance", "operateur_carte": "Opérateur"},
     )
     fig.update_traces(
         marker=dict(size=4),
@@ -232,8 +243,13 @@ def plot_carte(df_filtre, couleur_par):
     return fig
 
 
-def plot_top_amenageurs(df_filtre, nb_top):
-    top = df_filtre["amenageur"].value_counts().head(nb_top).sort_values()
+def classement_operateurs(df):
+    """Nombre de points de charge par opérateur, du plus grand au plus petit (hors non renseignés)."""
+    return df["operateur"].value_counts().drop(OPERATEUR_INCONNU, errors="ignore")
+
+
+def plot_top_operateurs(df_filtre, nb_top):
+    top = classement_operateurs(df_filtre).head(nb_top).sort_values()
     fig = px.bar(
         x=top.values,
         y=top.index,
@@ -241,7 +257,7 @@ def plot_top_amenageurs(df_filtre, nb_top):
         text=top.values,
         color_discrete_sequence=[COLOR_TEAL],
         labels={"x": "Points de charge", "y": ""},
-        title=f"Top {nb_top} des aménageurs (selon les filtres)",
+        title=f"Top {nb_top} des opérateurs (selon les filtres)",
     )
     fig.update_traces(
         texttemplate="%{text:,.0f}",
@@ -306,7 +322,7 @@ def afficher_carte(df):
             value=(debut_defaut, annees_dispo[-1]),
         )
     with col2:
-        couleur_par = st.radio("Colorer par", ["Année", "Puissance", "Aménageur"], horizontal=True)
+        couleur_par = st.radio("Colorer par", ["Année", "Puissance", "Opérateur"], horizontal=True)
     puissances = st.multiselect("Puissance", CLASSES_PUISSANCE, default=CLASSES_PUISSANCE)
 
     df_filtre = df_metro[
@@ -316,20 +332,20 @@ def afficher_carte(df):
 
     col4, col5 = st.columns([1, 2])
     with col4:
-        nb_top = st.slider("Nombre de plus grands aménageurs", 5, 25, 10)
+        nb_top = st.slider("Nombre de plus grands opérateurs", 5, 25, 10)
     # Classement calculé sur toute la métropole pour que la liste reste stable quand on change les filtres
-    top_amenageurs = df_metro["amenageur"].value_counts().head(nb_top).index.tolist()
+    top_operateurs = classement_operateurs(df_metro).head(nb_top).index.tolist()
     with col5:
-        amenageurs = st.multiselect(
-            "Aménageurs (classés du plus grand au plus petit)",
-            top_amenageurs,
-            help="Laisser vide pour afficher tous les aménageurs.",
+        operateurs = st.multiselect(
+            "Opérateurs (classés du plus grand au plus petit)",
+            top_operateurs,
+            help="Laisser vide pour afficher tous les opérateurs.",
         )
 
-    if amenageurs:
-        df_filtre = df_filtre[df_filtre["amenageur"].isin(amenageurs)]
+    if operateurs:
+        df_filtre = df_filtre[df_filtre["operateur"].isin(operateurs)]
     df_filtre = df_filtre.assign(
-        amenageur_carte=df_filtre["amenageur"].where(df_filtre["amenageur"].isin(top_amenageurs), AUTRES)
+        operateur_carte=df_filtre["operateur"].where(df_filtre["operateur"].isin(top_operateurs), AUTRES)
     )
 
     if df_filtre.empty:
@@ -338,7 +354,7 @@ def afficher_carte(df):
 
     st.caption(f"{len(df_filtre):,} points de charge affichés".replace(",", " "))
     st.plotly_chart(plot_carte(df_filtre, couleur_par))
-    st.plotly_chart(plot_top_amenageurs(df_filtre, nb_top))
+    st.plotly_chart(plot_top_operateurs(df_filtre, nb_top))
 
 def main():
     st.set_page_config(page_title="Bornes de recharge", layout="wide")
