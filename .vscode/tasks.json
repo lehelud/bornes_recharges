@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Installer les dependances",
+      "type": "shell",
+      "command": "pip install -r requirements.txt",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Lancer Streamlit",
+      "type": "shell",
+      "command": "streamlit run app.py",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": [],
+      "runOptions": {
+        "runOn": "default"
+      }
+    },
+    {
+      "label": "Installer + Lancer Streamlit",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Installer les dependances",
+        "Lancer Streamlit"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
