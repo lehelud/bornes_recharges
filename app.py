@@ -33,6 +33,8 @@ CLASSES_PUISSANCE = [
 ]
 COULEURS_PUISSANCE = ["#b5e0a8", "#4cb88f", "#1a8a8f", "#1f5a8a", "#3b1f6b", "#bdbdbd"]
 COULEUR_AUTRES = "#bdbdbd"
+COULEUR_INCONNU = "#e3e3e3"
+PALETTE_OPERATEURS = px.colors.qualitative.Safe[:10]  # palette lisible par les daltoniens
 
 COLOR_TEAL = "#1AA6A6"
 COLOR_BLUE = "#007ACC"
@@ -156,10 +158,73 @@ def plot_total_annuel(bornes_par_annee):
         hovertemplate="<b>%{x}</b><br>Bornes : %{y:,.0f}<extra></extra>",
     )
     fig.update_layout(
+        separators=", ",  # format français : 1 234,5
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(showgrid=False, zeroline=False),
         xaxis=dict(showgrid=False),
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
+    return fig
+
+
+def plot_repartition_annuelle(df, years_window, par, nb_top, en_pourcentage):
+    """Barres empilées du nombre de bornes par année, réparties par opérateur ou par puissance."""
+    annee_courante = datetime.now().year
+    annees = range(annee_courante - years_window + 1, annee_courante + 1)
+    d = df[df["annee_mise_en_service"].isin(annees)].drop_duplicates("id_pdc_itinerance")
+
+    if par == "Opérateur":
+        top = classement_operateurs(d).head(nb_top).index.tolist()
+        categorie = d["operateur"].where(d["operateur"].isin(top + [OPERATEUR_INCONNU]), AUTRES)
+        ordre = top + [AUTRES, OPERATEUR_INCONNU]
+        couleurs = PALETTE_OPERATEURS[: len(top)] + [COULEUR_AUTRES, COULEUR_INCONNU]
+        titre_legende = "Opérateur"
+    else:
+        categorie = d["classe_puissance"]
+        ordre, couleurs = CLASSES_PUISSANCE, COULEURS_PUISSANCE
+        titre_legende = "Puissance"
+
+    comptes = (
+        d.assign(categorie=categorie)
+        .groupby(["annee_mise_en_service", "categorie"])
+        .size()
+        .reset_index(name="Bornes")
+    )
+    comptes["Annee"] = comptes["annee_mise_en_service"].astype(int).astype(str)
+    comptes["Part"] = 100 * comptes["Bornes"] / comptes.groupby("Annee")["Bornes"].transform("sum")
+    presentes = set(comptes["categorie"])
+    ordre_present = [c for c in ordre if c in presentes]
+
+    fig = px.bar(
+        comptes,
+        x="Annee",
+        y="Part" if en_pourcentage else "Bornes",
+        color="categorie",
+        category_orders={"categorie": ordre_present, "Annee": sorted(comptes["Annee"].unique())},
+        color_discrete_map=dict(zip(ordre, couleurs)),
+        custom_data=["Bornes", "Part"],
+        title=f"Bornes installées par année, par {titre_legende.lower()}",
+        labels={"Annee": "Année", "categorie": titre_legende, "Bornes": "Nombre de bornes", "Part": "Part des bornes (%)"},
+    )
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>%{x} : %{customdata[0]:,.0f} bornes (%{customdata[1]:.1f} %)<extra></extra>",
+    )
+    if not en_pourcentage:
+        totaux = comptes.groupby("Annee")["Bornes"].sum()
+        fig.add_trace(go.Scatter(
+            x=totaux.index, y=totaux.values, text=totaux.values, mode="text",
+            texttemplate="%{text:,.0f}", textposition="top center",
+            showlegend=False, hoverinfo="skip",
+        ))
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        barmode="stack",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False, ticksuffix=" %" if en_pourcentage else ""),
+        xaxis=dict(showgrid=False),
+        legend=dict(traceorder="reversed"),  # même ordre que l'empilement
         hoverlabel=dict(bgcolor="white", font_size=13),
     )
     return fig
@@ -184,6 +249,7 @@ def plot_moyenne_journaliere(results):
         hovertemplate="<b>%{x}</b><br>Moyenne : %{y:.1f} bornes/jour<extra></extra>",
     )
     fig.update_layout(
+        separators=", ",  # format français : 1 234,5
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(showgrid=False, zeroline=False),
@@ -233,6 +299,7 @@ def plot_carte(df_filtre, couleur_par):
         ),
     )
     fig.update_layout(
+        separators=", ",  # format français : 1 234,5
         map_style="carto-positron",
         margin=dict(l=0, r=0, t=10, b=0),
         height=650,
@@ -265,6 +332,7 @@ def plot_top_operateurs(df_filtre, nb_top):
         hovertemplate="<b>%{y}</b><br>%{x:,.0f} points de charge<extra></extra>",
     )
     fig.update_layout(
+        separators=", ",  # format français : 1 234,5
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
@@ -291,17 +359,29 @@ def afficher_kpis(df, bornes_par_annee):
     total = int(df["id_pdc_itinerance"].nunique())
     cette_annee = int(bornes_par_annee.get(annee_courante, 0))
     annee_prec = int(bornes_par_annee.get(annee_courante - 1, 0))
-    delta = f"+{cette_annee - annee_prec:,}" if annee_prec else "N/A"
+    delta = f"{cette_annee - annee_prec:+,}".replace(",", " ") if annee_prec else "N/A"
     c1, c2, c3 = st.columns(3)
     c1.metric("Total bornes", f"{total:,}".replace(",", " "))
     c2.metric(f"Installees en {annee_courante}", f"{cette_annee:,}".replace(",", " "))
     c3.metric(f"vs {annee_courante - 1}", delta)
 
 
-def afficher_graphiques(results, bornes_par_annee):
+def afficher_graphiques(df, results, bornes_par_annee):
     choix = st.radio("Graphique a afficher :", ["Nombre total par annee", "Moyenne par jour ouvre"], horizontal=True)
     if choix == "Nombre total par annee":
-        st.plotly_chart(plot_total_annuel(bornes_par_annee))
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            par = st.radio("Répartition", ["Aucune", "Opérateur", "Puissance"], horizontal=True, key="repartition")
+        if par == "Aucune":
+            st.plotly_chart(plot_total_annuel(bornes_par_annee))
+            return
+        nb_top = len(PALETTE_OPERATEURS)
+        if par == "Opérateur":
+            with col2:
+                nb_top = st.slider("Nombre d'opérateurs détaillés", 3, len(PALETTE_OPERATEURS), 8, key="nb_top_graph")
+        with col3:
+            en_pourcentage = st.toggle("Afficher en %", key="pourcentage")
+        st.plotly_chart(plot_repartition_annuelle(df, YEARS_WINDOW, par, nb_top, en_pourcentage))
     else:
         st.plotly_chart(plot_moyenne_journaliere(results))
 
@@ -363,7 +443,7 @@ def main():
     afficher_header(df)
     afficher_kpis(df, bornes_par_annee)
     st.divider()
-    afficher_graphiques(results, bornes_par_annee)
+    afficher_graphiques(df, results, bornes_par_annee)
     st.divider()
     afficher_carte(df)
 
