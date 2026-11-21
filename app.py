@@ -169,8 +169,9 @@ def plot_carte(df_metro, annees):
         center={"lat": 46.5, "lon": 2.5},
         title="Stations de recharge en France",
         labels={"annee_str": "Annee"},
+        category_orders={"annee_str": [str(a) for a in sorted(annees)]},
     )
-    fig.update_traces(marker=dict(size=4), hovertemplate="<b>%{hovertext}</b><br>Annee : %{marker.color}<extra></extra>")
+    fig.update_traces(marker=dict(size=4), hovertemplate="<b>%{hovertext}</b><br>Annee : %{fullData.name}<extra></extra>")
     fig.update_layout(
         map_style="carto-positron",
         margin=dict(l=0, r=0, t=40, b=0),
