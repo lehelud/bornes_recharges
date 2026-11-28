@@ -220,7 +220,8 @@ def _evaluer(abonnements, opts, energies):
             best = min(accessibles, key=lambda x: (x["prix"], frais_fixes(x["offer"]), x["plus_proche_km"]))
             utilises.add(best["offer"]["offer_id"])
             prix, label = best["prix"], (f"{OPERATOR_LABELS[best['op']]} via « {best['offer']['offer_name']} »"
-                                         f" (à {best['plus_proche_km']:.1f} km — {best['zone']})")
+                                         f" (à {best['plus_proche_km']:.1f} km — {best['zone']})"
+                                         + (" ⚠️ tarif estimé" if best["offer"]["fiabilite"] == "estimation" else ""))
         else:
             prix, label = PRIX_MARCHE[palier], "aucun réseau référencé : prix moyen du marché"
             non_reference.append(palier)

@@ -6,6 +6,8 @@ Une « zone » est l'ensemble des bornes utiles à l'utilisateur :
   domicile → destination récurrente).
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import requests
@@ -17,6 +19,7 @@ GEOCODERS = [
     "https://data.geopf.fr/geocodage/search",      # point d'accès actuel de la Base Adresse Nationale
     "https://api-adresse.data.gouv.fr/search/",    # ancien point d'accès
 ]
+ORS_URL = "https://api.openrouteservice.org/v2/directions/driving-car/geojson"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
 
 # Lambert-93 : projection officielle française, en mètres (calculs de distance précis)
@@ -41,25 +44,63 @@ def geocode(adresse):
     return None
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner=False)
-def itineraire(lat1, lon1, lat2, lon2):
-    """Itinéraire routier OSRM. Renvoie (liste de (lon, lat), distance_km, est_routier).
+def _cle_ors():
+    """Clé OpenRouteService : secrets Streamlit (ORS_API_KEY) ou variable d'environnement.
 
-    En cas d'indisponibilité du service, on se rabat sur la ligne droite
-    (distance × 1,3, ordre de grandeur habituel du détour routier).
+    Ne jamais écrire la clé dans le code : la renseigner dans .streamlit/secrets.toml
+    (fichier ignoré par git) ou dans les « Secrets » de Streamlit Community Cloud.
     """
     try:
-        resp = requests.get(
-            OSRM_URL.format(lon1=lon1, lat1=lat1, lon2=lon2, lat2=lat2),
-            params={"overview": "full", "geometries": "geojson"}, timeout=10,
-        )
-        if resp.status_code == 200:
-            route = resp.json()["routes"][0]
-            return [tuple(c) for c in route["geometry"]["coordinates"]], route["distance"] / 1000, True
-    except (requests.RequestException, ValueError, KeyError, IndexError):
+        cle = st.secrets.get("ORS_API_KEY")
+        if cle:
+            return cle
+    except Exception:  # pas de fichier secrets.toml
         pass
+    return os.environ.get("ORS_API_KEY")
+
+
+def _route_ors(lat1, lon1, lat2, lon2, cle):
+    resp = requests.post(
+        ORS_URL, json={"coordinates": [[lon1, lat1], [lon2, lat2]]},
+        headers={"Authorization": cle, "Content-Type": "application/json"}, timeout=15,
+    )
+    if resp.status_code != 200:
+        return None
+    feat = resp.json()["features"][0]
+    return [tuple(c[:2]) for c in feat["geometry"]["coordinates"]], feat["properties"]["summary"]["distance"] / 1000
+
+
+def _route_osrm(lat1, lon1, lat2, lon2):
+    resp = requests.get(
+        OSRM_URL.format(lon1=lon1, lat1=lat1, lon2=lon2, lat2=lat2),
+        params={"overview": "full", "geometries": "geojson"}, timeout=10,
+    )
+    if resp.status_code != 200:
+        return None
+    route = resp.json()["routes"][0]
+    return [tuple(c) for c in route["geometry"]["coordinates"]], route["distance"] / 1000
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def itineraire(lat1, lon1, lat2, lon2):
+    """Itinéraire routier. Renvoie (liste de (lon, lat), distance_km, source).
+
+    Ordre d'essai : OpenRouteService (si une clé est configurée), serveur de
+    démonstration OSRM, puis ligne droite (distance × 1,3, ordre de grandeur
+    habituel du détour routier).
+    """
+    cle = _cle_ors()
+    essais = ([("OpenRouteService", lambda: _route_ors(lat1, lon1, lat2, lon2, cle))] if cle else []) + [
+        ("OSRM", lambda: _route_osrm(lat1, lon1, lat2, lon2))]
+    for source, appel in essais:
+        try:
+            res = appel()
+            if res:
+                return res[0], res[1], source
+        except (requests.RequestException, ValueError, KeyError, IndexError):
+            continue
     vol = haversine_km(lat1, lon1, np.array([lat2]), np.array([lon2]))[0]
-    return [(lon1, lat1), (lon2, lat2)], vol * 1.3, False
+    return [(lon1, lat1), (lon2, lat2)], vol * 1.3, "ligne droite"
 
 
 def haversine_km(lat, lon, lats, lons):

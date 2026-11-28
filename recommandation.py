@@ -145,8 +145,8 @@ def _afficher_resultats(stations, domicile, travail, dest, routes, allers_retour
 
     st.success("📍 " + " · ".join(f"{n} : {p[0]}" for n, p in
                                   (("Domicile", domicile), ("Travail", travail), ("Destination", dest)) if p))
-    for nom, (_, dist, routier) in routes.items():
-        st.caption(f"{nom} : {dist:.0f} km" + ("" if routier else
+    for nom, (_, dist, source) in routes.items():
+        st.caption(f"{nom} : {dist:.0f} km" + (f" (itinéraire {source})" if source != "ligne droite" else
                    " (estimation à vol d'oiseau × 1,3 : service d'itinéraire indisponible)"))
 
     m1, m2, m3, m4 = st.columns(4)

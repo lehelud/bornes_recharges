@@ -17,3 +17,9 @@ Fichiers :
 - `moteur.py` : normalisation des bornes et calculs (coût mensuel, combinaisons, seuil de rentabilité).
 - `geo.py` : géocodage, itinéraire et zones de recherche (rayon / corridor).
 - `offres_recharge.py` : base des offres tarifaires (CPO, réseaux locaux, eMSP) avec leur niveau de fiabilité — à mettre à jour quand les tarifs changent.
+
+### Clé OpenRouteService (itinéraires)
+L'itinéraire routier utilise OpenRouteService si une clé est configurée (sinon le serveur de démonstration OSRM,
+puis la ligne droite). **Ne jamais écrire la clé dans le code.**
+- En local : copier `.streamlit/secrets.toml.example` en `.streamlit/secrets.toml` (ignoré par git) et y mettre la clé.
+- Sur Streamlit Community Cloud : *Settings → Secrets*, ajouter `ORS_API_KEY = "..."`.
