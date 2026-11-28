@@ -10,6 +10,9 @@ import numpy as np
 from babel.dates import format_date
 from pandas.tseries.holiday import USFederalHolidayCalendar as Calendar
 import warnings
+import os
+
+import recommandation
 
 plt.rcParams['font.family'] = 'Montserrat'
 
@@ -35,89 +38,109 @@ def download_csv(url, file_path):
 # Local path where the CSV will be saved
 file_path = 'downloaded_data.csv'
 
-# Call the function to download the CSV
-download_csv(url, file_path)
+# Les données sont mises en cache (24 h) : Streamlit ré-exécute le script à chaque
+# interaction, il ne faut donc pas re-télécharger le fichier à chaque clic.
+@st.cache_data(ttl=24 * 3600, show_spinner="Chargement des données IRVE…")
+def load_raw_data():
+    download_csv(url, file_path)
+    # Repli sur le jeu de données versionné si le téléchargement a échoué
+    source = file_path if os.path.exists(file_path) else 'dataset.csv'
+    return pd.read_csv(source, low_memory=False)
 
-# Lire le contenu téléchargé directement en DataFrame
-df = pd.read_csv(file_path, low_memory=False)
 
-# Transformer toutes les colonnes date en datetime
-# Limiter les valeurs entre 1677 et 2262 avant conversion
-date_columns = df.filter(regex='date_|_at$').columns
-date_columns = df.filter(regex='date_|_at$').columns
-for col in date_columns:
-    # Remplacer les valeurs qui semblent hors des bornes acceptées
-    df[col] = df[col].apply(lambda x: x if isinstance(x, str) and (x.isnumeric() or x[0:4].isdigit() and 1677 <= int(x[0:4]) <= 2262) else None)
+@st.cache_data(ttl=24 * 3600, show_spinner="Préparation des bornes pour le comparateur…")
+def load_stations():
+    return recommandation.prepare_stations(load_raw_data())
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner="Préparation du tableau de bord…")
+def prepare_dashboard_data():
+    df = load_raw_data().copy()
+
+    # Transformer toutes les colonnes date en datetime
+    # Limiter les valeurs entre 1677 et 2262 avant conversion
+    date_columns = df.filter(regex='date_|_at$').columns
+    date_columns = df.filter(regex='date_|_at$').columns
+    for col in date_columns:
+        # Remplacer les valeurs qui semblent hors des bornes acceptées
+        df[col] = df[col].apply(lambda x: x if isinstance(x, str) and (x.isnumeric() or x[0:4].isdigit() and 1677 <= int(x[0:4]) <= 2262) else None)
     
-    # Convertir la colonne en datetime, ignorer les erreurs et les valeurs non valides
-    df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
+        # Convertir la colonne en datetime, ignorer les erreurs et les valeurs non valides
+        df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
 
-# Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
-df = df.dropna(subset=date_columns)
+    # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
+    df = df.dropna(subset=date_columns)
 
-annee_actuelle = datetime.now().year
-vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
-df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce', utc=True).dt.year.astype('Int64')
+    annee_actuelle = datetime.now().year
+    vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
+    df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce', utc=True).dt.year.astype('Int64')
 
-# Compter le nombre unique de bornes installées par année
-df_year = df[df['annee_mise_en_service'].isin(vecteur_annee_inverse)]
+    # Compter le nombre unique de bornes installées par année
+    df_year = df[df['annee_mise_en_service'].isin(vecteur_annee_inverse)]
 
-# Calcul du nombre moyen d'installation par jour ouvré
-df_nb_id_year = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
+    # Calcul du nombre moyen d'installation par jour ouvré
+    df_nb_id_year = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
 
-# Create a DataFrame to store results
-results = pd.DataFrame(df_nb_id_year, columns=['id_pdc_itinerance'])
+    # Create a DataFrame to store results
+    results = pd.DataFrame(df_nb_id_year, columns=['id_pdc_itinerance'])
 
-# Calculate number of working days per year, excluding federal US holidays
-workdays_per_year = {}
-years = results.index
-for year in years:
-    all_days = pd.date_range(start=str(year), end=str(year + 1), inclusive='left', freq='B')
-    holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
-    workdays = all_days.difference(holidays)
-    workdays_per_year[year] = len(workdays)
+    # Calculate number of working days per year, excluding federal US holidays
+    workdays_per_year = {}
+    years = results.index
+    for year in years:
+        all_days = pd.date_range(start=str(year), end=str(year + 1), inclusive='left', freq='B')
+        holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
+        workdays = all_days.difference(holidays)
+        workdays_per_year[year] = len(workdays)
 
-results['working_days'] = pd.Series(workdays_per_year)
-results['avg_per_working_day'] = results['id_pdc_itinerance'] / results['working_days']
+    results['working_days'] = pd.Series(workdays_per_year)
+    results['avg_per_working_day'] = results['id_pdc_itinerance'] / results['working_days']
 
-# Get the current year
-current_year = datetime.now().year
+    # Get the current year
+    current_year = datetime.now().year
 
-# Check if the current year is in the results and adjust for a partial year
-if current_year in results.index:
-    today = datetime.now()
-    all_days = pd.date_range(start=f'{current_year}-01-01', end=today, inclusive='left', freq='B')
-    holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
-    workdays = all_days.difference(holidays)
-    results.at[current_year, 'working_days'] = len(workdays)
-    results.at[current_year, 'avg_per_working_day'] = results.at[current_year, 'id_pdc_itinerance'] / len(workdays)
+    # Check if the current year is in the results and adjust for a partial year
+    if current_year in results.index:
+        today = datetime.now()
+        all_days = pd.date_range(start=f'{current_year}-01-01', end=today, inclusive='left', freq='B')
+        holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
+        workdays = all_days.difference(holidays)
+        results.at[current_year, 'working_days'] = len(workdays)
+        results.at[current_year, 'avg_per_working_day'] = results.at[current_year, 'id_pdc_itinerance'] / len(workdays)
 
-bornes_par_annee = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
+    bornes_par_annee = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
 
-# Création d'un GeoDataFrame pour les coordonnées des stations
-gdf_stations = gpd.GeoDataFrame(
-    df,
-    geometry=gpd.points_from_xy(df['consolidated_longitude'], df['consolidated_latitude']),
-    crs="EPSG:4326"
-)
+    # Création d'un GeoDataFrame pour les coordonnées des stations
+    gdf_stations = gpd.GeoDataFrame(
+        df,
+        geometry=gpd.points_from_xy(df['consolidated_longitude'], df['consolidated_latitude']),
+        crs="EPSG:4326"
+    )
 
-gdf_stations = gdf_stations[gdf_stations['annee_mise_en_service'].isin(vecteur_annee_inverse)]
+    gdf_stations = gdf_stations[gdf_stations['annee_mise_en_service'].isin(vecteur_annee_inverse)]
 
-chemin_du_shapefile = "data/ARRONDISSEMENT.shp"
+    chemin_du_shapefile = "data/ARRONDISSEMENT.shp"
 
-# Lecture du shapefile avec geopandas
-france_metropolitaine = gpd.read_file(chemin_du_shapefile)
-france_metropolitaine = france_metropolitaine.to_crs(epsg=4326)
+    # Lecture du shapefile avec geopandas
+    france_metropolitaine = gpd.read_file(chemin_du_shapefile)
+    france_metropolitaine = france_metropolitaine.to_crs(epsg=4326)
 
-# Définition des limites géographiques approximatives de la France métropolitaine
-latitude_min, latitude_max = 41.5, 51.0
-longitude_min, longitude_max = -5.0, 9.5
+    # Définition des limites géographiques approximatives de la France métropolitaine
+    latitude_min, latitude_max = 41.5, 51.0
+    longitude_min, longitude_max = -5.0, 9.5
 
-# Filtrage des points en dehors des limites
-gdf_stations_france = gdf_stations[
-    (gdf_stations['consolidated_latitude'].between(latitude_min, latitude_max)) &
-    (gdf_stations['consolidated_longitude'].between(longitude_min, longitude_max))
-]
+    # Filtrage des points en dehors des limites
+    gdf_stations_france = gdf_stations[
+        (gdf_stations['consolidated_latitude'].between(latitude_min, latitude_max)) &
+        (gdf_stations['consolidated_longitude'].between(longitude_min, longitude_max))
+    ]
+
+    # Formater la date en français
+    date_max_created_at = pd.to_datetime(df['created_at'], errors='coerce', utc=True).max()
+    next_day = date_max_created_at + timedelta(days=1)
+    formatted_date = format_date(next_day, format='long', locale='fr')
+
+    return df_year, results, bornes_par_annee, gdf_stations_france, france_metropolitaine, formatted_date
 
 # Fonction pour générer le graphique du nombre moyen de borne par année
 def plot_avg_per_working_day(results):
@@ -134,7 +157,7 @@ def plot_avg_per_working_day(results):
     return fig
 
 # Fonction pour générer le graphique du nombre total de borne par année
-def plot_bar_chart(df_year):
+def plot_bar_chart(bornes_par_annee):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.bar(bornes_par_annee.index.astype(str), bornes_par_annee.values, color='#1AA6A6', width=0.5)
     ax.set_title('Nombre total de bornes installées par année')
@@ -166,13 +189,10 @@ def plot_map(gdf_stations_france, france_metropolitaine):
     plt.tight_layout()
     return fig
 
-# Formater la date en français
-date_max_created_at = pd.to_datetime(df['created_at'], errors='coerce', utc=True).max()
-next_day = date_max_created_at + timedelta(days=1)
-formatted_date = format_date(next_day, format='long', locale='fr')
 
 # Streamlit UI
-def main():
+def onglet_tableau_de_bord():
+    df_year, results, bornes_par_annee, gdf_stations_france, france_metropolitaine, formatted_date = prepare_dashboard_data()
     title = f"Bornes de recharge en France \n Dashboard en construction (données au {formatted_date} - mise à jour quotidienne)"
     st.title(title)
     st.markdown("Source des données: [Fichier consolidé des bornes de recharge pour véhicules électriques](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-électriques/)")
@@ -182,7 +202,7 @@ def main():
     )
     if chart_type == 'Nombre total de bornes installées par année':
         st.header("Nombre total de bornes installées par année")
-        fig1 = plot_bar_chart(df_year)
+        fig1 = plot_bar_chart(bornes_par_annee)
         st.pyplot(fig1)
     else:
         st.header("Nombre moyen de bornes installées par jour ouvré")
@@ -191,6 +211,16 @@ def main():
     st.header("Emplacement des stations de recharge en France")
     fig3 = plot_map(gdf_stations_france, france_metropolitaine)
     st.pyplot(fig3)
+
+
+def main():
+    st.set_page_config(page_title="Bornes de recharge en France", page_icon="⚡", layout="wide")
+    tab_dashboard, tab_offres = st.tabs(["📊 Tableau de bord", "💶 Quelle offre pour mon domicile ?"])
+    with tab_dashboard:
+        onglet_tableau_de_bord()
+    with tab_offres:
+        recommandation.render(load_stations())
+
 
 if __name__ == "__main__":
     main()
