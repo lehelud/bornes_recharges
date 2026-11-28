@@ -1,8 +1,8 @@
 numpy
 datetime
-pandas==1.4.3
-geopandas==0.10.2
-streamlit==1.10.0
-matplotlib==3.5.2
-requests==2.26.0
-babel==2.9.1
+pandas>=1.5
+geopandas>=0.12
+streamlit>=1.38
+matplotlib>=3.5.2
+requests>=2.27
+babel>=2.9.1
