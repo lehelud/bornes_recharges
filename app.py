@@ -1,225 +1,469 @@
-import streamlit as st
-import pandas as pd
-import matplotlib.pyplot as plt
-import requests
-from matplotlib.colors import Normalize
-from matplotlib.cm import ScalarMappable
-import geopandas as gpd
-from datetime import datetime, timedelta
-import numpy as np
-from babel.dates import format_date
-from pandas.tseries.holiday import USFederalHolidayCalendar as Calendar
 import warnings
-import os
+from datetime import datetime, timedelta
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+from babel.dates import format_date
 
 import recommandation
 
-plt.rcParams['font.family'] = 'Montserrat'
-
-# Ignorer les avertissements relatifs aux dates hors limites
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 
-# URL du fichier
-url = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
+DATA_URL = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
+SHAPEFILE_PATH = "data/ARRONDISSEMENT.shp"
+YEARS_WINDOW = 8
+LAT_MIN, LAT_MAX = 41.5, 51.0
+LON_MIN, LON_MAX = -5.0, 9.5
+JOURS_FERIES_FIXES = ["01-01","05-01","05-08","07-14","08-15","11-01","11-11","12-25"]
 
-# Fonction pour télécharger le CSV
-def download_csv(url, file_path):
-    try:
-        response = requests.get(url)
-        if response.status_code == 200:
-            with open(file_path, 'wb') as file:
-                file.write(response.content)
-            print(f"File downloaded successfully and saved as {file_path}")
-        else:
-            print(f"Failed to download the file. Status code: {response.status_code}")
-    except requests.RequestException as e:
-        print(f"An error occurred: {e}")
+ANNEE_MIN = 2010
+NON_RENSEIGNE = "Non renseignée"
+AUTRES = "Autres opérateurs"
+OPERATEUR_INCONNU = "Opérateur non renseigné"
+CLASSES_PUISSANCE = [
+    "Normale (≤ 7,4 kW)",
+    "Accélérée (7,4 – 22 kW)",
+    "Rapide (22 – 50 kW)",
+    "Rapide (50 – 150 kW)",
+    "Ultra-rapide (≥ 150 kW)",
+    NON_RENSEIGNE,
+]
+COULEURS_PUISSANCE = ["#b5e0a8", "#4cb88f", "#1a8a8f", "#1f5a8a", "#3b1f6b", "#bdbdbd"]
+COULEUR_AUTRES = "#bdbdbd"
+COULEUR_INCONNU = "#e3e3e3"
+PALETTE_OPERATEURS = px.colors.qualitative.Safe[:10]  # palette lisible par les daltoniens
 
-# Local path where the CSV will be saved
-file_path = 'downloaded_data.csv'
-
-# Les données sont mises en cache (24 h) : Streamlit ré-exécute le script à chaque
-# interaction, il ne faut donc pas re-télécharger le fichier à chaque clic.
-@st.cache_data(ttl=24 * 3600, show_spinner="Chargement des données IRVE…")
-def load_raw_data():
-    download_csv(url, file_path)
-    # Repli sur le jeu de données versionné si le téléchargement a échoué
-    source = file_path if os.path.exists(file_path) else 'dataset.csv'
-    return pd.read_csv(source, low_memory=False)
-
-
-@st.cache_data(ttl=24 * 3600, show_spinner="Préparation des bornes pour le comparateur…")
-def load_stations():
-    return recommandation.prepare_stations(load_raw_data())
+COLOR_TEAL = "#1AA6A6"
+COLOR_BLUE = "#007ACC"
 
 
-@st.cache_data(ttl=24 * 3600, show_spinner="Préparation du tableau de bord…")
-def prepare_dashboard_data():
-    df = load_raw_data().copy()
+def paques(annee):
+    a = annee % 19
+    b, c = divmod(annee, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    mois, jour = divmod(114 + h + l - 7 * m, 31)
+    return datetime(annee, mois, jour + 1)
 
-    # Transformer toutes les colonnes date en datetime
-    # Limiter les valeurs entre 1677 et 2262 avant conversion
-    date_columns = df.filter(regex='date_|_at$').columns
-    date_columns = df.filter(regex='date_|_at$').columns
-    for col in date_columns:
-        # Remplacer les valeurs qui semblent hors des bornes acceptées
-        df[col] = df[col].apply(lambda x: x if isinstance(x, str) and (x.isnumeric() or x[0:4].isdigit() and 1677 <= int(x[0:4]) <= 2262) else None)
-    
-        # Convertir la colonne en datetime, ignorer les erreurs et les valeurs non valides
-        df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
 
-    # Filtrer les dates non valides en supprimant les lignes avec NaT dans les colonnes de date
-    df = df.dropna(subset=date_columns)
+def jours_feries_france(annee):
+    p = paques(annee)
+    feries_variables = [p + timedelta(days=1), p + timedelta(days=39), p + timedelta(days=50)]
+    feries_fixes = [datetime(annee, int(d[:2]), int(d[3:])) for d in JOURS_FERIES_FIXES]
+    return pd.DatetimeIndex(feries_fixes + feries_variables)
 
-    annee_actuelle = datetime.now().year
-    vecteur_annee_inverse = np.arange(annee_actuelle, annee_actuelle - 1 - 7, -1)
-    df["annee_mise_en_service"] = pd.to_datetime(df['date_mise_en_service'], errors='coerce', utc=True).dt.year.astype('Int64')
 
-    # Compter le nombre unique de bornes installées par année
-    df_year = df[df['annee_mise_en_service'].isin(vecteur_annee_inverse)]
+def nb_jours_ouvres(annee, jusqu_au=None):
+    debut = datetime(annee, 1, 1)
+    fin = jusqu_au if jusqu_au else datetime(annee + 1, 1, 1)
+    jours = pd.bdate_range(start=debut, end=fin, inclusive="left")
+    return len(jours.difference(jours_feries_france(annee)))
 
-    # Calcul du nombre moyen d'installation par jour ouvré
-    df_nb_id_year = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
 
-    # Create a DataFrame to store results
-    results = pd.DataFrame(df_nb_id_year, columns=['id_pdc_itinerance'])
+@st.cache_data(ttl=86_400, show_spinner="Téléchargement du fichier IRVE...")
+def charger_brut(url):
+    """Fichier IRVE brut, partagé par le tableau de bord et le comparateur d'offres."""
+    response = requests.get(url, timeout=60)
+    response.raise_for_status()
+    return pd.read_csv(pd.io.common.BytesIO(response.content), low_memory=False)
 
-    # Calculate number of working days per year, excluding federal US holidays
-    workdays_per_year = {}
-    years = results.index
-    for year in years:
-        all_days = pd.date_range(start=str(year), end=str(year + 1), inclusive='left', freq='B')
-        holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
-        workdays = all_days.difference(holidays)
-        workdays_per_year[year] = len(workdays)
 
-    results['working_days'] = pd.Series(workdays_per_year)
-    results['avg_per_working_day'] = results['id_pdc_itinerance'] / results['working_days']
+@st.cache_data(ttl=86_400, show_spinner="Préparation des bornes pour le comparateur...")
+def charger_stations_comparateur(url):
+    # Part du fichier brut : le filtrage sur les dates du tableau de bord écarterait des bornes utiles
+    return recommandation.prepare_stations(charger_brut(url))
 
-    # Get the current year
-    current_year = datetime.now().year
 
-    # Check if the current year is in the results and adjust for a partial year
-    if current_year in results.index:
-        today = datetime.now()
-        all_days = pd.date_range(start=f'{current_year}-01-01', end=today, inclusive='left', freq='B')
-        holidays = Calendar().holidays(start=all_days.min(), end=all_days.max())
-        workdays = all_days.difference(holidays)
-        results.at[current_year, 'working_days'] = len(workdays)
-        results.at[current_year, 'avg_per_working_day'] = results.at[current_year, 'id_pdc_itinerance'] / len(workdays)
+@st.cache_data(ttl=86_400, show_spinner="Chargement des donnees...")
+def charger_donnees(url):
+    df = charger_brut(url).copy()
+    cols_date = df.filter(regex="date_|_at$").columns
+    for col in cols_date:
+        df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
+    df = df.dropna(subset=cols_date)
+    df["annee_mise_en_service"] = pd.to_datetime(df["date_mise_en_service"], errors="coerce", utc=True).dt.year.astype("Int64")
+    df["puissance_kw"] = convertir_puissance_kw(df["puissance_nominale"])
+    df["classe_puissance"] = classer_puissance(df["puissance_kw"])
+    df["operateur"] = nettoyer_operateur(df["nom_operateur"])
+    return df
 
-    bornes_par_annee = df_year.groupby('annee_mise_en_service')['id_pdc_itinerance'].nunique()
 
-    # Création d'un GeoDataFrame pour les coordonnées des stations
-    gdf_stations = gpd.GeoDataFrame(
-        df,
-        geometry=gpd.points_from_xy(df['consolidated_longitude'], df['consolidated_latitude']),
-        crs="EPSG:4326"
+def nettoyer_operateur(noms):
+    """Regroupe les variantes d'un même opérateur ('IZIVIA' / 'Izivia', 'SPBR1 | FR*EBN' / 'SPBR1')
+    et garde l'orthographe la plus fréquente."""
+    noms = noms.fillna(OPERATEUR_INCONNU).astype(str).str.split("|").str[0].str.strip()
+    cle = noms.str.casefold().str.replace(r"[^0-9a-zà-ÿ]", "", regex=True)
+    libelle = noms.groupby(cle).agg(lambda s: s.value_counts().index[0])
+    return cle.map(libelle)
+
+
+def convertir_puissance_kw(puissance):
+    """Puissance en kW ; les valeurs >= 1000 sont supposées saisies en W."""
+    p = pd.to_numeric(puissance, errors="coerce")
+    return p.where(p < 1000, p / 1000)
+
+
+def classer_puissance(puissance_kw):
+    """Regroupe les puissances en 5 classes + 'Non renseignée' (valeur nulle ou absente)."""
+    classes = pd.cut(
+        puissance_kw,
+        bins=[0, 7.4, 23, 49.99, 149.99, np.inf],  # 23 kW pour inclure les bornes déclarées à 22,08 kW
+        labels=CLASSES_PUISSANCE[:-1],
     )
+    return classes.cat.add_categories(NON_RENSEIGNE).fillna(NON_RENSEIGNE).astype(str)
 
-    gdf_stations = gdf_stations[gdf_stations['annee_mise_en_service'].isin(vecteur_annee_inverse)]
 
-    chemin_du_shapefile = "data/ARRONDISSEMENT.shp"
+@st.cache_data(show_spinner="Chargement du shapefile...")
+def charger_geodata(shapefile_path):
+    return gpd.read_file(shapefile_path).to_crs(epsg=4326)
 
-    # Lecture du shapefile avec geopandas
-    france_metropolitaine = gpd.read_file(chemin_du_shapefile)
-    france_metropolitaine = france_metropolitaine.to_crs(epsg=4326)
 
-    # Définition des limites géographiques approximatives de la France métropolitaine
-    latitude_min, latitude_max = 41.5, 51.0
-    longitude_min, longitude_max = -5.0, 9.5
+def calculer_stats_annuelles(df, years_window):
+    annee_courante = datetime.now().year
+    annees = np.arange(annee_courante, annee_courante - years_window, -1)
+    df_filtre = df[df["annee_mise_en_service"].isin(annees)]
+    bornes_par_annee = df_filtre.groupby("annee_mise_en_service")["id_pdc_itinerance"].nunique()
+    results = pd.DataFrame({"id_pdc_itinerance": bornes_par_annee})
+    for annee in results.index:
+        jours = nb_jours_ouvres(annee, jusqu_au=datetime.now()) if annee == annee_courante else nb_jours_ouvres(annee)
+        results.loc[annee, "working_days"] = jours
+    results["avg_per_working_day"] = results["id_pdc_itinerance"] / results["working_days"]
+    return results, bornes_par_annee
 
-    # Filtrage des points en dehors des limites
-    gdf_stations_france = gdf_stations[
-        (gdf_stations['consolidated_latitude'].between(latitude_min, latitude_max)) &
-        (gdf_stations['consolidated_longitude'].between(longitude_min, longitude_max))
+
+def filtrer_france_metropolitaine(df):
+    df_metro = df[
+        df["consolidated_latitude"].between(LAT_MIN, LAT_MAX)
+        & df["consolidated_longitude"].between(LON_MIN, LON_MAX)
+    ].copy()
+    return df_metro
+
+
+# ---------------------------------------------------------------------------
+# Graphiques Plotly interactifs
+# ---------------------------------------------------------------------------
+
+def plot_total_annuel(bornes_par_annee):
+    df_plot = bornes_par_annee.reset_index()
+    df_plot.columns = ["Annee", "Bornes"]
+    df_plot["Annee"] = df_plot["Annee"].astype(str)
+    fig = px.bar(
+        df_plot,
+        x="Annee",
+        y="Bornes",
+        text="Bornes",
+        color_discrete_sequence=[COLOR_TEAL],
+        title="Nombre total de bornes installees par annee",
+        labels={"Annee": "Annee", "Bornes": "Nombre de bornes"},
+    )
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Bornes : %{y:,.0f}<extra></extra>",
+    )
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False),
+        xaxis=dict(showgrid=False),
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
+    return fig
+
+
+def plot_repartition_annuelle(df, years_window, par, nb_top, en_pourcentage):
+    """Barres empilées du nombre de bornes par année, réparties par opérateur ou par puissance."""
+    annee_courante = datetime.now().year
+    annees = range(annee_courante - years_window + 1, annee_courante + 1)
+    d = df[df["annee_mise_en_service"].isin(annees)].drop_duplicates("id_pdc_itinerance")
+
+    if par == "Opérateur":
+        top = classement_operateurs(d).head(nb_top).index.tolist()
+        categorie = d["operateur"].where(d["operateur"].isin(top + [OPERATEUR_INCONNU]), AUTRES)
+        ordre = top + [AUTRES, OPERATEUR_INCONNU]
+        couleurs = PALETTE_OPERATEURS[: len(top)] + [COULEUR_AUTRES, COULEUR_INCONNU]
+        titre_legende = "Opérateur"
+    else:
+        categorie = d["classe_puissance"]
+        ordre, couleurs = CLASSES_PUISSANCE, COULEURS_PUISSANCE
+        titre_legende = "Puissance"
+
+    comptes = (
+        d.assign(categorie=categorie)
+        .groupby(["annee_mise_en_service", "categorie"])
+        .size()
+        .reset_index(name="Bornes")
+    )
+    comptes["Annee"] = comptes["annee_mise_en_service"].astype(int).astype(str)
+    comptes["Part"] = 100 * comptes["Bornes"] / comptes.groupby("Annee")["Bornes"].transform("sum")
+    presentes = set(comptes["categorie"])
+    ordre_present = [c for c in ordre if c in presentes]
+
+    fig = px.bar(
+        comptes,
+        x="Annee",
+        y="Part" if en_pourcentage else "Bornes",
+        color="categorie",
+        category_orders={"categorie": ordre_present, "Annee": sorted(comptes["Annee"].unique())},
+        color_discrete_map=dict(zip(ordre, couleurs)),
+        custom_data=["Bornes", "Part"],
+        title=f"Bornes installées par année, par {titre_legende.lower()}",
+        labels={"Annee": "Année", "categorie": titre_legende, "Bornes": "Nombre de bornes", "Part": "Part des bornes (%)"},
+    )
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>%{x} : %{customdata[0]:,.0f} bornes (%{customdata[1]:.1f} %)<extra></extra>",
+    )
+    if not en_pourcentage:
+        totaux = comptes.groupby("Annee")["Bornes"].sum()
+        fig.add_trace(go.Scatter(
+            x=totaux.index, y=totaux.values, text=totaux.values, mode="text",
+            texttemplate="%{text:,.0f}", textposition="top center",
+            showlegend=False, hoverinfo="skip",
+        ))
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        barmode="stack",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False, ticksuffix=" %" if en_pourcentage else ""),
+        xaxis=dict(showgrid=False),
+        legend=dict(traceorder="reversed"),  # même ordre que l'empilement
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
+    return fig
+
+
+def plot_moyenne_journaliere(results):
+    df_plot = results.reset_index()[["annee_mise_en_service", "avg_per_working_day"]]
+    df_plot.columns = ["Annee", "Moyenne"]
+    df_plot["Annee"] = df_plot["Annee"].astype(str)
+    fig = px.bar(
+        df_plot,
+        x="Annee",
+        y="Moyenne",
+        text="Moyenne",
+        color_discrete_sequence=[COLOR_BLUE],
+        title="Nombre moyen de bornes installees par jour ouvre",
+        labels={"Annee": "Annee", "Moyenne": "Moyenne / jour ouvre"},
+    )
+    fig.update_traces(
+        texttemplate="%{text:.1f}",
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>Moyenne : %{y:.1f} bornes/jour<extra></extra>",
+    )
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(showgrid=False, zeroline=False),
+        xaxis=dict(showgrid=False),
+        hoverlabel=dict(bgcolor="white", font_size=13),
+    )
+    return fig
+
+
+def couleurs_carte(df_filtre, couleur_par):
+    """Retourne (colonne, ordre des modalités, couleurs) selon la variable choisie."""
+    if couleur_par == "Puissance":
+        ordre = [c for c in CLASSES_PUISSANCE if c in set(df_filtre["classe_puissance"])]
+        couleurs = dict(zip(CLASSES_PUISSANCE, COULEURS_PUISSANCE))
+        return "classe_puissance", ordre, [couleurs[c] for c in ordre]
+    if couleur_par == "Opérateur":
+        effectifs = df_filtre["operateur_carte"].value_counts()
+        ordre = [a for a in effectifs.index if a != AUTRES] + ([AUTRES] if AUTRES in effectifs.index else [])
+        palette = px.colors.qualitative.Alphabet
+        couleurs = [COULEUR_AUTRES if a == AUTRES else palette[i % len(palette)] for i, a in enumerate(ordre)]
+        return "operateur_carte", ordre, couleurs
+    ordre = sorted(df_filtre["annee_str"].unique())
+    couleurs = px.colors.sample_colorscale("Viridis", [i / max(len(ordre) - 1, 1) for i in range(len(ordre))])
+    return "annee_str", ordre, couleurs
+
+
+def plot_carte(df_filtre, couleur_par):
+    colonne, ordre, couleurs = couleurs_carte(df_filtre, couleur_par)
+    fig = px.scatter_map(
+        df_filtre,
+        lat="consolidated_latitude",
+        lon="consolidated_longitude",
+        color=colonne,
+        category_orders={colonne: ordre},
+        color_discrete_sequence=couleurs,
+        custom_data=["operateur", "classe_puissance", "puissance_kw", "annee_str"],
+        zoom=4.8,
+        center={"lat": 46.5, "lon": 2.5},
+        labels={"annee_str": "Année", "classe_puissance": "Puissance", "operateur_carte": "Opérateur"},
+    )
+    fig.update_traces(
+        marker=dict(size=4),
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "Puissance : %{customdata[2]:.1f} kW (%{customdata[1]})<br>"
+            "Mise en service : %{customdata[3]}<extra></extra>"
+        ),
+    )
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        map_style="carto-positron",
+        margin=dict(l=0, r=0, t=10, b=0),
+        height=650,
+        hoverlabel=dict(bgcolor="white", font_size=12),
+        legend=dict(itemsizing="constant"),
+        uirevision="carte",  # garde le zoom quand on change un filtre
+    )
+    return fig
+
+
+def classement_operateurs(df):
+    """Nombre de points de charge par opérateur, du plus grand au plus petit (hors non renseignés)."""
+    return df["operateur"].value_counts().drop(OPERATEUR_INCONNU, errors="ignore")
+
+
+def plot_top_operateurs(df_filtre, nb_top):
+    top = classement_operateurs(df_filtre).head(nb_top).sort_values()
+    fig = px.bar(
+        x=top.values,
+        y=top.index,
+        orientation="h",
+        text=top.values,
+        color_discrete_sequence=[COLOR_TEAL],
+        labels={"x": "Points de charge", "y": ""},
+        title=f"Top {nb_top} des opérateurs (selon les filtres)",
+    )
+    fig.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>%{x:,.0f} points de charge<extra></extra>",
+    )
+    fig.update_layout(
+        separators=", ",  # format français : 1 234,5
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        height=max(300, 28 * len(top) + 80),
+        margin=dict(l=0, r=40, t=50, b=0),
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Interface Streamlit
+# ---------------------------------------------------------------------------
+
+def afficher_header(df):
+    date_max = pd.to_datetime(df["created_at"], errors="coerce", utc=True).max()
+    date_affichee = format_date(date_max + timedelta(days=1), format="long", locale="fr")
+    st.title("Bornes de recharge en France")
+    st.caption(f"Donnees au {date_affichee} - mise a jour quotidienne")
+    st.markdown("Source : [data.gouv.fr](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-electriques/)")
+
+
+def afficher_kpis(df, bornes_par_annee):
+    annee_courante = datetime.now().year
+    total = int(df["id_pdc_itinerance"].nunique())
+    cette_annee = int(bornes_par_annee.get(annee_courante, 0))
+    annee_prec = int(bornes_par_annee.get(annee_courante - 1, 0))
+    delta = f"{cette_annee - annee_prec:+,}".replace(",", " ") if annee_prec else "N/A"
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total bornes", f"{total:,}".replace(",", " "))
+    c2.metric(f"Installees en {annee_courante}", f"{cette_annee:,}".replace(",", " "))
+    c3.metric(f"vs {annee_courante - 1}", delta)
+
+
+def afficher_graphiques(df, results, bornes_par_annee):
+    choix = st.radio("Graphique a afficher :", ["Nombre total par annee", "Moyenne par jour ouvre"], horizontal=True)
+    if choix == "Nombre total par annee":
+        col1, col2, col3 = st.columns([2, 2, 1])
+        with col1:
+            par = st.radio("Répartition", ["Aucune", "Opérateur", "Puissance"], horizontal=True, key="repartition")
+        if par == "Aucune":
+            st.plotly_chart(plot_total_annuel(bornes_par_annee))
+            return
+        nb_top = len(PALETTE_OPERATEURS)
+        if par == "Opérateur":
+            with col2:
+                nb_top = st.slider("Nombre d'opérateurs détaillés", 3, len(PALETTE_OPERATEURS), 8, key="nb_top_graph")
+        with col3:
+            en_pourcentage = st.toggle("Afficher en %", key="pourcentage")
+        st.plotly_chart(plot_repartition_annuelle(df, YEARS_WINDOW, par, nb_top, en_pourcentage))
+    else:
+        st.plotly_chart(plot_moyenne_journaliere(results))
+
+
+def afficher_carte(df):
+    st.subheader("Carte interactive des points de charge")
+    df_metro = filtrer_france_metropolitaine(df)
+    df_metro = df_metro[df_metro["annee_mise_en_service"].between(ANNEE_MIN, datetime.now().year)].copy()
+    df_metro["annee_str"] = df_metro["annee_mise_en_service"].astype(int).astype(str)
+    annees_dispo = sorted(int(a) for a in df_metro["annee_mise_en_service"].unique())
+
+    col1, col2 = st.columns(2)
+    with col1:
+        debut_defaut = max(annees_dispo[0], annees_dispo[-1] - YEARS_WINDOW + 1)
+        annee_debut, annee_fin = st.select_slider(
+            "Années de mise en service",
+            options=annees_dispo,
+            value=(debut_defaut, annees_dispo[-1]),
+        )
+    with col2:
+        couleur_par = st.radio("Colorer par", ["Année", "Puissance", "Opérateur"], horizontal=True)
+    puissances = st.multiselect("Puissance", CLASSES_PUISSANCE, default=CLASSES_PUISSANCE)
+
+    df_filtre = df_metro[
+        df_metro["annee_mise_en_service"].between(annee_debut, annee_fin)
+        & df_metro["classe_puissance"].isin(puissances)
     ]
 
-    # Formater la date en français
-    date_max_created_at = pd.to_datetime(df['created_at'], errors='coerce', utc=True).max()
-    next_day = date_max_created_at + timedelta(days=1)
-    formatted_date = format_date(next_day, format='long', locale='fr')
+    col4, col5 = st.columns([1, 2])
+    with col4:
+        nb_top = st.slider("Nombre de plus grands opérateurs", 5, 25, 10)
+    # Classement calculé sur toute la métropole pour que la liste reste stable quand on change les filtres
+    top_operateurs = classement_operateurs(df_metro).head(nb_top).index.tolist()
+    with col5:
+        operateurs = st.multiselect(
+            "Opérateurs (classés du plus grand au plus petit)",
+            top_operateurs,
+            help="Laisser vide pour afficher tous les opérateurs.",
+        )
 
-    return df_year, results, bornes_par_annee, gdf_stations_france, france_metropolitaine, formatted_date
-
-# Fonction pour générer le graphique du nombre moyen de borne par année
-def plot_avg_per_working_day(results):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(results.index.astype(str), results['avg_per_working_day'], color='#007ACC', width=0.5)
-    ax.set_title('Nombre moyen de bornes installées par jour ouvré par année')
-    ax.set_xlabel('Année')
-    ax.set_ylabel('Moyenne par jour ouvré')
-    plt.grid(False)
-    plt.box(False)
-    for index, value in enumerate(results['avg_per_working_day']):
-        ax.text(index, value, f'{value:.1f}', ha='center', va='bottom')
-    plt.tight_layout()
-    return fig
-
-# Fonction pour générer le graphique du nombre total de borne par année
-def plot_bar_chart(bornes_par_annee):
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(bornes_par_annee.index.astype(str), bornes_par_annee.values, color='#1AA6A6', width=0.5)
-    ax.set_title('Nombre total de bornes installées par année')
-    ax.set_xlabel('Année')
-    ax.set_ylabel('Nombre de bornes installées')
-    plt.grid(False)
-    plt.box(False)
-    for index, value in enumerate(bornes_par_annee.values):
-        ax.text(index, value, f'{value:,.0f}'.replace(',', ' '), ha='center', va='bottom')
-    plt.tight_layout()
-    return fig
-
-# Fonction pour générer le graphique de la carte
-def plot_map(gdf_stations_france, france_metropolitaine):
-    cmap = plt.cm.viridis
-    norm = Normalize(vmin=gdf_stations_france['annee_mise_en_service'].min(), vmax=gdf_stations_france['annee_mise_en_service'].max())
-    fig, ax = plt.subplots(figsize=(10, 10))
-    france_metropolitaine.plot(ax=ax, color='lightgray')
-    gdf_stations_france.plot(ax=ax, markersize=5, column='annee_mise_en_service', cmap=cmap, legend=False, norm=norm)
-    sm = ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label('Année de Mise en Service')
-    plt.grid(False)
-    plt.box(False)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_title('Emplacement des stations de recharge en France')
-    plt.tight_layout()
-    return fig
-
-
-# Streamlit UI
-def onglet_tableau_de_bord():
-    df_year, results, bornes_par_annee, gdf_stations_france, france_metropolitaine, formatted_date = prepare_dashboard_data()
-    title = f"Bornes de recharge en France \n Dashboard en construction (données au {formatted_date} - mise à jour quotidienne)"
-    st.title(title)
-    st.markdown("Source des données: [Fichier consolidé des bornes de recharge pour véhicules électriques](https://www.data.gouv.fr/fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-électriques/)")
-    chart_type = st.radio(
-        "Choisissez le type de graphique à afficher:",
-        ('Nombre total de bornes installées par année', 'Nombre moyen de bornes installées par jour ouvré')
+    if operateurs:
+        df_filtre = df_filtre[df_filtre["operateur"].isin(operateurs)]
+    df_filtre = df_filtre.assign(
+        operateur_carte=df_filtre["operateur"].where(df_filtre["operateur"].isin(top_operateurs), AUTRES)
     )
-    if chart_type == 'Nombre total de bornes installées par année':
-        st.header("Nombre total de bornes installées par année")
-        fig1 = plot_bar_chart(bornes_par_annee)
-        st.pyplot(fig1)
-    else:
-        st.header("Nombre moyen de bornes installées par jour ouvré")
-        fig2 = plot_avg_per_working_day(results)
-        st.pyplot(fig2)
-    st.header("Emplacement des stations de recharge en France")
-    fig3 = plot_map(gdf_stations_france, france_metropolitaine)
-    st.pyplot(fig3)
 
+    if df_filtre.empty:
+        st.info("Aucun point de charge ne correspond à ces filtres.")
+        return
+
+    st.caption(f"{len(df_filtre):,} points de charge affichés".replace(",", " "))
+    st.plotly_chart(plot_carte(df_filtre, couleur_par))
+    st.plotly_chart(plot_top_operateurs(df_filtre, nb_top))
 
 def main():
-    st.set_page_config(page_title="Bornes de recharge en France", page_icon="⚡", layout="wide")
-    tab_dashboard, tab_offres = st.tabs(["📊 Tableau de bord", "💶 Quelle offre pour mon domicile ?"])
-    with tab_dashboard:
-        onglet_tableau_de_bord()
-    with tab_offres:
-        recommandation.render(load_stations())
+    st.set_page_config(page_title="Bornes de recharge", layout="wide")
+    onglet_dashboard, onglet_offres = st.tabs(["📊 Tableau de bord", "💶 Quelle offre pour mes trajets ?"])
+    with onglet_dashboard:
+        df = charger_donnees(DATA_URL)
+        results, bornes_par_annee = calculer_stats_annuelles(df, YEARS_WINDOW)
+        afficher_header(df)
+        afficher_kpis(df, bornes_par_annee)
+        st.divider()
+        afficher_graphiques(df, results, bornes_par_annee)
+        st.divider()
+        afficher_carte(df)
+    with onglet_offres:
+        recommandation.render(charger_stations_comparateur(DATA_URL))
 
 
 if __name__ == "__main__":
