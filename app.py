@@ -10,6 +10,8 @@ import requests
 import streamlit as st
 from babel.dates import format_date
 
+import recommandation
+
 warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 
 DATA_URL = "https://www.data.gouv.fr/fr/datasets/r/eb76d20a-8501-400e-b336-d85724de5435"
@@ -68,11 +70,23 @@ def nb_jours_ouvres(annee, jusqu_au=None):
     return len(jours.difference(jours_feries_france(annee)))
 
 
-@st.cache_data(ttl=86_400, show_spinner="Chargement des donnees...")
-def charger_donnees(url):
+@st.cache_data(ttl=86_400, show_spinner="Téléchargement du fichier IRVE...")
+def charger_brut(url):
+    """Fichier IRVE brut, partagé par le tableau de bord et le comparateur d'offres."""
     response = requests.get(url, timeout=60)
     response.raise_for_status()
-    df = pd.read_csv(pd.io.common.BytesIO(response.content), low_memory=False)
+    return pd.read_csv(pd.io.common.BytesIO(response.content), low_memory=False)
+
+
+@st.cache_data(ttl=86_400, show_spinner="Préparation des bornes pour le comparateur...")
+def charger_stations_comparateur(url):
+    # Part du fichier brut : le filtrage sur les dates du tableau de bord écarterait des bornes utiles
+    return recommandation.prepare_stations(charger_brut(url))
+
+
+@st.cache_data(ttl=86_400, show_spinner="Chargement des donnees...")
+def charger_donnees(url):
+    df = charger_brut(url).copy()
     cols_date = df.filter(regex="date_|_at$").columns
     for col in cols_date:
         df[col] = pd.to_datetime(df[col], errors="coerce", utc=True)
@@ -438,14 +452,18 @@ def afficher_carte(df):
 
 def main():
     st.set_page_config(page_title="Bornes de recharge", layout="wide")
-    df = charger_donnees(DATA_URL)
-    results, bornes_par_annee = calculer_stats_annuelles(df, YEARS_WINDOW)
-    afficher_header(df)
-    afficher_kpis(df, bornes_par_annee)
-    st.divider()
-    afficher_graphiques(df, results, bornes_par_annee)
-    st.divider()
-    afficher_carte(df)
+    onglet_dashboard, onglet_offres = st.tabs(["📊 Tableau de bord", "💶 Quelle offre pour mes trajets ?"])
+    with onglet_dashboard:
+        df = charger_donnees(DATA_URL)
+        results, bornes_par_annee = calculer_stats_annuelles(df, YEARS_WINDOW)
+        afficher_header(df)
+        afficher_kpis(df, bornes_par_annee)
+        st.divider()
+        afficher_graphiques(df, results, bornes_par_annee)
+        st.divider()
+        afficher_carte(df)
+    with onglet_offres:
+        recommandation.render(charger_stations_comparateur(DATA_URL))
 
 
 if __name__ == "__main__":
