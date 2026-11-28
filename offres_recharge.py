@@ -39,6 +39,12 @@ OPERATORS = [
     {"operator_id": "iecharge", "label": "IECharge", "afirev_prefixes": ["FRIEN"], "patterns": [r"iecharge"]},
     {"operator_id": "allego", "label": "Allego", "afirev_prefixes": ["FRALL"], "patterns": [r"\ballego\b"]},
     {"operator_id": "engie", "label": "ENGIE Vianeo", "afirev_prefixes": ["FRLMS"], "patterns": [r"vianeo", r"engie mobilit"]},
+    {"operator_id": "leclerc", "label": "E.Leclerc (Charge E-Lec)", "afirev_prefixes": ["FRLE2"], "patterns": [r"leclerc", r"charge e-lec"]},
+    {"operator_id": "atlante", "label": "Atlante", "afirev_prefixes": ["FRATL"], "patterns": [r"\batlante\b"]},
+    {"operator_id": "powerdot", "label": "Powerdot", "afirev_prefixes": ["FRPD1"], "patterns": [r"power ?dot"]},
+    {"operator_id": "driveco", "label": "Driveco", "afirev_prefixes": [], "patterns": [r"driveco"]},
+    {"operator_id": "eborn", "label": "Réseau eborn", "afirev_prefixes": ["FREBN"], "patterns": [r"\be-?born\b", r"spbr1"]},
+    {"operator_id": "metropolis", "label": "Métropolis (Grand Paris)", "afirev_prefixes": ["FRMGP"], "patterns": [r"m[ée]tropolis"]},
     {"operator_id": "izivia", "label": "Izivia (EDF)", "afirev_prefixes": [], "patterns": [r"izivia"]},
     {"operator_id": "totalenergies", "label": "TotalEnergies", "afirev_prefixes": [], "patterns": [r"totalenergies", r"total marketing"]},
 ]
@@ -126,6 +132,64 @@ CPO_OFFERS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Réseaux locaux / régionaux ajoutés (tarifs relevés en novembre 2026).
+# `fiabilite` : "officiel" (grille publiée), "indicatif" (presse / comparateurs),
+# "estimation" (prix affiché borne par borne : valeur moyenne estimée).
+# `operator_rules` : tarifs spécifiques à un autre réseau couvert par l'offre.
+# ---------------------------------------------------------------------------
+LOCAL_OFFERS = [
+    # E.LECLERC : 0,17 €/kWh en AC depuis le 05/10/2026 ; DC affiché borne par borne
+    {"offer_id": "leclerc_direct", "provider_name": "E.Leclerc", "offer_name": "Charge E-Lec (sans abonnement)",
+     "target_operators": ["leclerc"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(ac=0.17),
+     "fiabilite": "indicatif",
+     "source_url": "https://www.automobile-propre.com/articles/recharge-des-voitures-electriques-leclerc-baisse-encore-son-prix-pour-etre-moins-cher-que-lidl/"},
+    # ATLANTE : ~0,54 €/kWh sans abonnement ; Atlante Go 9,99 €/mois → 0,29 €/kWh (+ Powerdot à 0,39)
+    {"offer_id": "atlante_direct", "provider_name": "Atlante", "offer_name": "Atlante sans abonnement",
+     "target_operators": ["atlante"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(ac=0.54, dc=0.54, hpc=0.54),
+     "fiabilite": "indicatif",
+     "source_url": "https://electroverse.com/fr-FR/community/ev-blogs-and-guides/combien-co-te-la-recharge-d-une-voiture-lectrique-en-france"},
+    {"offer_id": "atlante_go", "provider_name": "Atlante", "offer_name": "Atlante Go",
+     "target_operators": ["atlante", "powerdot"], "monthly_fee_eur": 9.99,
+     "pricing_rules": _rules(ac=0.29, dc=0.29, hpc=0.29),
+     "operator_rules": {"powerdot": _rules(ac=0.39, dc=0.39, hpc=0.39)},
+     "fiabilite": "indicatif",
+     "source_url": "https://www.automobile-propre.com/breves/atlante-go-un-nouveau-forfait-avec-un-tarif-unique-ideal-pour-les-clients-reguliers/"},
+    # POWERDOT : prix sans abonnement affiché sur la borne (fourchette 0,30-0,53 €/kWh)
+    {"offer_id": "powerdot_direct", "provider_name": "Powerdot", "offer_name": "Powerdot sans abonnement",
+     "target_operators": ["powerdot"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(ac=0.40, dc=0.55, hpc=0.55),
+     "fiabilite": "estimation",
+     "source_url": "https://electroverse.com/fr/community/ev-blogs-and-guides/le-guide-ultime-du-reseau-de-recharge-:-powerdot"},
+    {"offer_id": "powerdot_199", "provider_name": "Powerdot", "offer_name": "Powerdot abonnement 1,99 €",
+     "target_operators": ["powerdot"], "monthly_fee_eur": 1.99, "pricing_rules": _rules(ac=0.36, dc=0.52, hpc=0.52),
+     "fiabilite": "indicatif", "source_url": "https://lesvoitures.fr/prix-recharge-voiture-electrique/"},
+    {"offer_id": "powerdot_499", "provider_name": "Powerdot", "offer_name": "Powerdot abonnement 4,99 €",
+     "target_operators": ["powerdot"], "monthly_fee_eur": 4.99, "pricing_rules": _rules(ac=0.29, dc=0.41, hpc=0.41),
+     "fiabilite": "indicatif", "source_url": "https://lesvoitures.fr/prix-recharge-voiture-electrique/"},
+    # DRIVECO : prix par station (relevés 0,62-0,70 €/kWh en DC)
+    {"offer_id": "driveco_direct", "provider_name": "Driveco", "offer_name": "Driveco paiement direct",
+     "target_operators": ["driveco"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(dc=0.65, hpc=0.63),
+     "fiabilite": "estimation", "source_url": "https://seety.co/fr/recharge-electrique-pas-cher"},
+    # EBORN (réseau des syndicats d'énergie du Sud-Est) : abonnement 10 €/an
+    {"offer_id": "eborn_direct", "provider_name": "eborn", "offer_name": "eborn sans abonnement",
+     "target_operators": ["eborn"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(ac=0.34, dc=0.44),
+     "fiabilite": "indicatif", "source_url": "https://web.uta.com/hubfs/UTA_eCharge_Tariffs_FR_2603.pdf"},
+    {"offer_id": "eborn_abo", "provider_name": "eborn", "offer_name": "eborn abonné (10 €/an)",
+     "target_operators": ["eborn"], "monthly_fee_eur": round(10 / 12, 2), "pricing_rules": _rules(ac=0.24, dc=0.34),
+     "fiabilite": "indicatif", "source_url": "https://www.automobile-propre.com/articles/le-reseau-e-born-facture-la-charge-au-kwh/"},
+    # METROPOLIS (Grand Paris hors Paris) : grille sans abonnement
+    {"offer_id": "metropolis_direct", "provider_name": "Métropolis", "offer_name": "Métropolis sans abonnement",
+     "target_operators": ["metropolis"], "monthly_fee_eur": 0.0, "pricing_rules": _rules(ac=0.45, dc=0.60, hpc=0.65),
+     "fiabilite": "indicatif", "source_url": "https://metropolegrandparis.fr/sites/default/files/media/document/Plaquette%20M%C3%A9tropolis.pdf"},
+]
+
+for _o in CPO_OFFERS:
+    _o.setdefault("fiabilite", "officiel")
+CPO_OFFERS = CPO_OFFERS + LOCAL_OFFERS
+
+# Prix moyen de marché utilisé quand aucun réseau référencé n'est disponible
+PRIX_MARCHE = {"AC": 0.40, "DC": 0.55, "HPC": 0.59}
+
+# ---------------------------------------------------------------------------
 # Offres eMSP (badges multi-réseaux)
 # `markup_pct` : commission appliquée sur le tarif direct de l'opérateur.
 # `one_time_fee_eur` : achat du badge, amorti sur 12 mois dans la simulation.
@@ -149,5 +213,7 @@ EMSP_OFFERS = [
      "target_operators": ["ALL"], "monthly_fee_eur": 0.0, "one_time_fee_eur": 15.0, "markup_pct": 10.0,
      "source_url": "https://www.izivia.com/offres-particuliers/pass-izivia"},
 ]
+for _o in EMSP_OFFERS:
+    _o.setdefault("fiabilite", "indicatif")
 
 LAST_VERIFIED = "Grille issue du document fourni par l'utilisateur (tarifs publics indicatifs)"
